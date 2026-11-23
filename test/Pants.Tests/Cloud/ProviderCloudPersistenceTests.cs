@@ -60,10 +60,12 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
             new TestCloudObjectStore(),
             new TestCloudObjectStore(),
             lease);
+
         foreach (var segment in segments)
         {
             await individualPersistence.PublishWalBatchAsync([segment], CancellationToken.None);
         }
+
 
         var individualRequests = individualWalStore.RequestCount;
         var individualPayloadBytesCopied = individualWalStore.PayloadBytesCopied;
@@ -351,10 +353,12 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
         var epoch = await lease.AcquireAsync(CancellationToken.None);
         var walStore = new SnapshotConsistencyCloudObjectStore();
         var existingSegments = new SortedDictionary<ulong, ProviderPublishedWalSegment>();
+
         for (ulong segmentId = 1; segmentId <= 40; segmentId++)
         {
             existingSegments.Add(segmentId, TestWalSegment.Publish(TestWalSegment.Create(segmentId, epoch, segmentId, $"{segmentId}.wal", [unchecked((byte)segmentId)])));
         }
+
 
         var initialCatalogBytes = JsonSerializer.SerializeToUtf8Bytes(
             new ProviderWalCatalog { FencingEpoch = epoch, Segments = existingSegments },
@@ -535,6 +539,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
                 ],
                 CancellationToken.None)
             .AsTask();
+
         try
         {
             await getStarted.Task.WaitAsync(TestTimeouts.Expected);
@@ -549,6 +554,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
         {
             releaseGet.TrySetResult();
         }
+
 
         await Assert.ThrowsAsync<PantsFencedException>(() => publication);
 
@@ -943,6 +949,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
             firstLease);
         CloudDdlRegistry staleRegistry;
         string? expectedVersion;
+
         if (registryExists)
         {
             Assert.True(await firstPersistence.CompareExchangeDdlRegistryAsync(
@@ -959,6 +966,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
             staleRegistry = new CloudDdlRegistry();
             expectedVersion = null;
         }
+
 
         staleRegistry.Epoch = 1;
         using var staleEdit = JsonDocument.Parse(
@@ -1142,6 +1150,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
             lease);
 
         var fencing = persistence.FenceWalCatalogAsync(CancellationToken.None).AsTask();
+
         try
         {
             await getStarted.Task.WaitAsync(TestTimeouts.Expected);
@@ -1156,6 +1165,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
         {
             releaseGet.TrySetResult();
         }
+
 
         await Assert.ThrowsAsync<PantsFencedException>(() => fencing);
 
@@ -1835,7 +1845,8 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
     static async Task<ulong> PrepareFreshCacheSequenceFrontierAsync(
         string cachePath,
         PantsCloudStorageLocation location,
-        RuntimeDependencies dependencies)
+        RuntimeDependencies dependencies
+    )
     {
         var options = PantsOpenOptions.Cloud(cachePath, location).WithBackgroundCompaction(false);
         await using (var firstHost = await PantsDatabase.OpenForTestingAsync(options, dependencies))
@@ -1854,7 +1865,8 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
     static ValueTask<IPantsDatabase> OpenCloudCacheAsync(
         string cachePath,
         PantsCloudStorageLocation location,
-        RuntimeDependencies dependencies) =>
+        RuntimeDependencies dependencies
+    ) =>
         PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(cachePath, location).WithBackgroundCompaction(false),
             dependencies);
@@ -1862,6 +1874,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
     static void CopyCrashImage(string source, string destination)
     {
         Directory.CreateDirectory(destination);
+
         foreach (var sourceDirectory in Directory.EnumerateDirectories(
                      source,
                      "*",
@@ -1872,16 +1885,19 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
                 Path.GetRelativePath(source, sourceDirectory)));
         }
 
+
         foreach (var sourceFile in Directory.EnumerateFiles(
                      source,
                      "*",
                      SearchOption.AllDirectories))
         {
             var relativePath = Path.GetRelativePath(source, sourceFile);
+
             if (relativePath is "LOCK" or ".midge_leader.lock")
             {
                 continue;
             }
+
 
             var destinationFile = Path.Combine(destination, relativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(destinationFile)!);
@@ -1893,6 +1909,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
     {
         var leasePath = Path.Combine(databasePath, ".midge_leader");
         var lines = await File.ReadAllLinesAsync(leasePath);
+
         for (var index = 0; index < lines.Length; index++)
         {
             if (lines[index].StartsWith("acquired_at: ", StringComparison.Ordinal))
@@ -1900,6 +1917,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
                 lines[index] = "acquired_at: 1970-01-01T00:00:00Z";
             }
         }
+
 
         await File.WriteAllLinesAsync(
             leasePath,
@@ -1909,7 +1927,8 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
 
     static async Task CommitCloudAsyncAsync(
         IPantsDatabase database,
-        ReadOnlyMemory<byte> key)
+        ReadOnlyMemory<byte> key
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -1920,7 +1939,8 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
 
     static async Task CommitCloudStrictAsync(
         IPantsDatabase database,
-        ReadOnlyMemory<byte> key)
+        ReadOnlyMemory<byte> key
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -1932,14 +1952,17 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
     static async Task WaitForCloudDurabilityAsync(IPantsDatabase database)
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         while (true)
         {
             timeout.Token.ThrowIfCancellationRequested();
             var metrics = await database.Diagnostics.GetRuntimeMetricsAsync(timeout.Token);
+
             if (metrics.WalCloudDurableSequence >= metrics.CurrentSequence)
             {
                 return;
             }
+
 
             await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
         }
@@ -1949,14 +1972,17 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
         IPantsDatabase database)
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         while (true)
         {
             timeout.Token.ThrowIfCancellationRequested();
             var metrics = await database.Diagnostics.GetRuntimeMetricsAsync(timeout.Token);
+
             if (metrics.Health == PantsEngineHealth.Degraded)
             {
                 return metrics;
             }
+
 
             await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
         }

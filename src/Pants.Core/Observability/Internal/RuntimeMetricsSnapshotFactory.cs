@@ -18,7 +18,8 @@ sealed class RuntimeMetricsSnapshotFactory(
 
     public PantsRuntimeMetrics Create(
         RuntimeState state,
-        ulong walCloudDurableSequence)
+        ulong walCloudDurableSequence
+    )
     {
         var hybridMetrics = hybridCache is not null && diskStore is not null
             ? hybridCache.GetMetrics(diskStore)
@@ -43,7 +44,8 @@ sealed class RuntimeMetricsSnapshotFactory(
     public PantsRuntimeMetrics RefreshPublished(
         PantsRuntimeMetrics snapshot,
         RuntimeState state,
-        ulong walCloudDurableSequence)
+        ulong walCloudDurableSequence
+    )
     {
         if (state.Health != PantsEngineHealth.Healthy)
         {
@@ -204,7 +206,8 @@ sealed class RuntimeMetricsSnapshotFactory(
         int activeCompactionRequests,
         ulong walCloudDurableSequence,
         DateTimeOffset now,
-        WriteAdmission? writeAdmission)
+        WriteAdmission? writeAdmission
+    )
     {
         var activeSnapshotTimes = telemetry.ActiveSnapshotStartTimes;
         var snapshotMetrics = ObserveSnapshots(activeSnapshotTimes, now);
@@ -304,17 +307,21 @@ sealed class RuntimeMetricsSnapshotFactory(
 
     (long OldestSnapshotAgeSeconds, int LongLivedSnapshots) ObserveSnapshots(
         IEnumerable<KeyValuePair<long, DateTimeOffset>> snapshots,
-        DateTimeOffset now)
+        DateTimeOffset now
+    )
     {
         var oldestAge = TimeSpan.Zero;
         var longLivedSnapshots = 0;
+
         foreach (var snapshot in snapshots)
         {
             var age = GetSnapshotAge(now, snapshot.Value);
+
             if (age > oldestAge)
             {
                 oldestAge = age;
             }
+
 
             if (age < options.LongLivedSnapshotWarningThreshold)
             {
@@ -324,6 +331,7 @@ sealed class RuntimeMetricsSnapshotFactory(
             longLivedSnapshots++;
             telemetry.RecordLongLivedSnapshotWarning(snapshot.Key);
         }
+
 
         return (checked((long)oldestAge.TotalSeconds), longLivedSnapshots);
     }

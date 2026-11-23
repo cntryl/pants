@@ -14,18 +14,23 @@ sealed class FlushRuntimeService(
 
     public async ValueTask FlushAsync(
         MetadataOrigin origin,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default
+    ) =>
         _ = await ExecuteAsync(new FlushAllRuntimeRequest(origin), cancellationToken)
             .ConfigureAwait(false);
 
-    public ValueTask FlushAsync(RuntimeState state, ColumnFamilyIdentity columnFamily,
-        CancellationToken cancellationToken = default) =>
+    public ValueTask FlushAsync(
+        RuntimeState state,
+        ColumnFamilyIdentity columnFamily,
+        CancellationToken cancellationToken = default
+    ) =>
         FlushAsync(columnFamily, state.OrdinaryFlushOrigin, cancellationToken);
 
     public async ValueTask FlushAsync(
         ColumnFamilyIdentity columnFamily,
         MetadataOrigin origin,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default
+    ) =>
         _ = await ExecuteAsync(
                 new FlushColumnFamilyRuntimeRequest(columnFamily, origin),
                 cancellationToken)
@@ -34,7 +39,8 @@ sealed class FlushRuntimeService(
     public async ValueTask<Task<FrozenFlushRuntimeResult>> ScheduleFrozenFlushAsync(
         FrozenMemtableFlush frozen,
         FlushPublicationPlan? publicationPlan,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         var response = await ScheduleAsync(
                 new PublishFrozenMemtableRuntimeRequest(frozen, publicationPlan),
@@ -45,7 +51,8 @@ sealed class FlushRuntimeService(
 
     protected override ValueTask<FlushRuntimeResult> DispatchAsync(
         FlushRuntimeRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var store = flushStore ??
@@ -63,7 +70,8 @@ sealed class FlushRuntimeService(
 
     static ValueTask<FlushRuntimeResult> FlushAll(
         ILocalFlushStore store,
-        FlushAllRuntimeRequest request)
+        FlushAllRuntimeRequest request
+    )
     {
         store.Flush(request.Origin);
         return ValueTask.FromResult(default(FlushRuntimeResult));
@@ -71,7 +79,8 @@ sealed class FlushRuntimeService(
 
     static ValueTask<FlushRuntimeResult> FlushColumnFamily(
         ILocalFlushStore store,
-        FlushColumnFamilyRuntimeRequest request)
+        FlushColumnFamilyRuntimeRequest request
+    )
     {
         store.Flush(request.ColumnFamily, request.Origin);
         return ValueTask.FromResult(default(FlushRuntimeResult));
@@ -79,16 +88,19 @@ sealed class FlushRuntimeService(
 
     FlushRuntimeResult PublishFrozenMemtable(
         ILocalFlushStore store,
-        PublishFrozenMemtableRuntimeRequest request)
+        PublishFrozenMemtableRuntimeRequest request
+    )
     {
         var publicationPlan = request.PublicationPlan;
         var clock = timeProvider ?? TimeProvider.System;
         long? publicationStarted = null;
+
         try
         {
             if (publicationPlan is null)
             {
                 var started = Stopwatch.GetTimestamp();
+
                 try
                 {
                     publicationPlan = store.BuildFrozenFlushPlan(request.Frozen);

@@ -305,12 +305,14 @@ public sealed class MidgeTransactionAssertionParityTests
             await PutAsync(database, family, "guard", "v1", mode);
             await using var asserting = await BeginWriteAsync(database, family);
             asserting.AssertValue("guard"u8.ToArray(), "v1"u8.ToArray());
+
             for (var index = 0; index < 200; index++)
             {
                 asserting.Put(
                     TestBytes.FromString($"spill-key{index:0000}"),
                     TestBytes.FromString($"spill-value_{index:0000}"));
             }
+
 
             Assert.NotEmpty(Directory.GetFiles(Path.Combine(directory.Path, "txn"), "*.run"));
             await PutAsync(database, family, "guard", "v2", mode);
@@ -321,10 +323,12 @@ public sealed class MidgeTransactionAssertionParityTests
 
             Assert.Equal(PantsErrorCode.WriteConflict, conflict.Code);
             Assert.Equal(sequenceBefore, (await database.Diagnostics.GetRuntimeMetricsAsync()).CurrentSequence);
+
             for (var index = 0; index < 200; index++)
             {
                 Assert.Null(await ReadAsync(database, family, $"spill-key{index:0000}"));
             }
+
 
             Assert.Equal("v2", await ReadAsync(database, family, "guard"));
         }
@@ -405,10 +409,12 @@ public sealed class MidgeTransactionAssertionParityTests
     static ValueTask<IPantsDatabase> OpenMemoryAsync(long? transactionPoolBytes = null)
     {
         var options = PantsOpenOptions.InMemory();
+
         if (transactionPoolBytes is { } bytes)
         {
             options = options.WithTransactionMemoryPool(bytes);
         }
+
 
         return PantsDatabase.OpenAsync(options);
     }
@@ -416,7 +422,8 @@ public sealed class MidgeTransactionAssertionParityTests
     static ValueTask<IPantsDatabase> OpenDurableAsync(
         string mode,
         string path,
-        long? transactionPoolBytes = null)
+        long? transactionPoolBytes = null
+    )
     {
         var options = mode switch
         {
@@ -425,17 +432,20 @@ public sealed class MidgeTransactionAssertionParityTests
             _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unknown durable mode.")
         };
         options = options.WithBackgroundCompaction(false);
+
         if (transactionPoolBytes is { } bytes)
         {
             options = options.WithTransactionMemoryPool(bytes);
         }
+
 
         return PantsDatabase.OpenAsync(options);
     }
 
     static ValueTask<IPantsTransaction> BeginWriteAsync(
         IPantsDatabase database,
-        IPantsColumnFamily family) =>
+        IPantsColumnFamily family
+    ) =>
         database.Transactions.BeginAsync(family, PantsTransactionMode.ReadWrite);
 
     static async Task PutAsync(
@@ -443,7 +453,8 @@ public sealed class MidgeTransactionAssertionParityTests
         IPantsColumnFamily family,
         string key,
         string value,
-        string mode = "memory")
+        string mode = "memory"
+    )
     {
         await using var transaction = await BeginWriteAsync(database, family);
         transaction.Put(TestBytes.FromString(key), TestBytes.FromString(value));
@@ -458,7 +469,8 @@ public sealed class MidgeTransactionAssertionParityTests
     static async Task<string?> ReadAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,
-        string key)
+        string key
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,

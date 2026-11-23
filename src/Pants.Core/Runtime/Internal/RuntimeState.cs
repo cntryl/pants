@@ -15,10 +15,13 @@ sealed class RuntimeState
     public long DirectReadOnlyTransactionCounter;
     TaskCompletionSource _writePressureChanged = CreateWritePressureCompletion();
 
-    public RuntimeState(IPantsClock clock, RuntimeTelemetry telemetry,
+    public RuntimeState(
+        IPantsClock clock,
+        RuntimeTelemetry telemetry,
         MetadataAccountingOwner? metadataAccounting = null,
         MetadataMedium metadataMedium = MetadataMedium.Persistent,
-        MetadataOrigin ordinaryFlushOrigin = MetadataOrigin.OrdinaryLocalFlush)
+        MetadataOrigin ordinaryFlushOrigin = MetadataOrigin.OrdinaryLocalFlush
+    )
     {
         MetadataAccounting = metadataAccounting ?? new MetadataAccountingOwner();
         MetadataMedium = metadataMedium;
@@ -108,9 +111,11 @@ sealed class RuntimeState
         IReadOnlyDictionary<uint, ImmutableArray<FileMeta>> visibleFiles)
     {
         PublishedL0FileCounts.Clear();
+
         foreach (var (columnFamilyId, files) in visibleFiles)
         {
             var count = 0;
+
             foreach (var file in files)
             {
                 if (file.Level == 0)
@@ -118,6 +123,7 @@ sealed class RuntimeState
                     count++;
                 }
             }
+
 
             if (count != 0)
             {
@@ -182,13 +188,16 @@ sealed class RuntimeState
     public void ReleaseFlushedGeneration(FrozenMemtableFlush flush)
     {
         ArgumentNullException.ThrowIfNull(flush);
+
         if (!FamilyData.TryGetValue(flush.ColumnFamily, out var current))
         {
             return;
         }
 
+
         var frontier = flush.FrontierSequence;
         var updated = current;
+
         foreach (var operation in flush.Operations)
         {
             // <= rather than an exact sequence match: what matters is only that the
@@ -214,6 +223,7 @@ sealed class RuntimeState
                 }
             }
         }
+
 
         if (!ReferenceEquals(updated, current))
         {
@@ -257,7 +267,8 @@ sealed class RuntimeState
     /// </summary>
     public DatabaseVersion CreateVersion(
         IReadOnlyDictionary<uint, ImmutableArray<FileMeta>> visibleFiles,
-        SstReadView? readView = null) => new(
+        SstReadView? readView = null
+    ) => new(
         Sequence,
         FamilyData.ToImmutableDictionary(ColumnFamilyIdentityComparer.Instance),
         RangeTombstones.ToImmutableDictionary(ColumnFamilyIdentityComparer.Instance),

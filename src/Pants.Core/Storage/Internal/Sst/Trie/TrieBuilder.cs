@@ -32,9 +32,11 @@ sealed class TrieBuilder
     {
         var currentIndex = 0;
         var matchedLength = 0;
+
         while (matchedLength < key.Length)
         {
             var remaining = key[matchedLength..];
+
             if (!_nodes[currentIndex].TryGetChild(remaining[0], out var edge))
             {
                 var prefixLength = checked((ushort)matchedLength);
@@ -44,9 +46,11 @@ sealed class TrieBuilder
                 return;
             }
 
+
             var childIndex = checked((int)edge.ChildIndex);
             var child = _nodes[childIndex];
             var childMatchLength = CommonPrefixLength(child.KeyDelta, remaining);
+
             if (childMatchLength == child.KeyDelta.Length)
             {
                 matchedLength = checked(matchedLength + childMatchLength);
@@ -54,9 +58,11 @@ sealed class TrieBuilder
                 continue;
             }
 
+
             SplitNode(childIndex, childMatchLength, remaining, blockId);
             return;
         }
+
 
         _nodes[currentIndex].BlockId = blockId;
     }
@@ -65,7 +71,8 @@ sealed class TrieBuilder
         int nodeIndex,
         int splitPosition,
         ReadOnlySpan<byte> remaining,
-        uint blockId)
+        uint blockId
+    )
     {
         var existing = _nodes[nodeIndex];
         var oldSuffix = existing.KeyDelta[splitPosition..];
@@ -86,6 +93,7 @@ sealed class TrieBuilder
         intermediate.AddChild(new TrieEdge(oldSuffix[0], oldRemainderIndex));
 
         var newSuffix = remaining[splitPosition..].ToArray();
+
         if (newSuffix.Length == 0)
         {
             intermediate.BlockId = blockId;
@@ -97,6 +105,7 @@ sealed class TrieBuilder
             intermediate.AddChild(new TrieEdge(newSuffix[0], newIndex));
         }
 
+
         _nodes[nodeIndex] = intermediate;
     }
 
@@ -104,10 +113,12 @@ sealed class TrieBuilder
     {
         var length = Math.Min(left.Length, right.Length);
         var index = 0;
+
         while (index < length && left[index] == right[index])
         {
             index++;
         }
+
 
         return index;
     }

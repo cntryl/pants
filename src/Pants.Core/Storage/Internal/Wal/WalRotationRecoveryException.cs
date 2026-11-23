@@ -4,7 +4,8 @@ sealed class WalRotationRecoveryException : Exception
 {
     public WalRotationRecoveryException(
         Exception rotationFailure,
-        Exception recoveryFailure)
+        Exception recoveryFailure
+    )
         : base(
             "The WAL stream could not be recovered after rotation failed.",
             new AggregateException(rotationFailure, recoveryFailure))

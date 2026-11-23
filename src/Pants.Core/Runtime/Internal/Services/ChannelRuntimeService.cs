@@ -56,7 +56,8 @@ abstract class ChannelRuntimeService<TRequest, TResult> : IAsyncDisposable, IRun
 
     public async ValueTask<TResult> ExecuteAsync(
         TRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         var response = await ScheduleAsync(request, cancellationToken).ConfigureAwait(false);
         return await response.ConfigureAwait(false);
@@ -64,7 +65,8 @@ abstract class ChannelRuntimeService<TRequest, TResult> : IAsyncDisposable, IRun
 
     public async ValueTask<Task<TResult>> ScheduleAsync(
         TRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 
@@ -72,6 +74,7 @@ abstract class ChannelRuntimeService<TRequest, TResult> : IAsyncDisposable, IRun
         var admitted = false;
         Interlocked.Increment(ref _outstanding);
         Interlocked.Increment(ref _queueDepth);
+
         try
         {
             await _commands.Writer.WriteAsync(command, cancellationToken).ConfigureAwait(false);
@@ -95,7 +98,8 @@ abstract class ChannelRuntimeService<TRequest, TResult> : IAsyncDisposable, IRun
 
     protected abstract ValueTask<TResult> DispatchAsync(
         TRequest request,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     async Task RunAsync()
     {
@@ -103,6 +107,7 @@ abstract class ChannelRuntimeService<TRequest, TResult> : IAsyncDisposable, IRun
         {
             Interlocked.Decrement(ref _queueDepth);
             Interlocked.Increment(ref _inFlight);
+
             try
             {
                 try

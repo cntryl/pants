@@ -9,7 +9,8 @@ sealed class CompactionStreams : IDisposable
 
     CompactionStreams(
         IReadOnlyList<ICompactionEntryStream> streams,
-        IReadOnlyList<RangeTombstone> rangeTombstones)
+        IReadOnlyList<RangeTombstone> rangeTombstones
+    )
     {
         Streams = streams;
         RangeTombstones = rangeTombstones;
@@ -50,7 +51,8 @@ sealed class CompactionStreams : IDisposable
         Func<FileMeta, string> pathOf,
         Func<string, SstReader> openReader,
         int maximumSourceStreams,
-        ResourceBudget? resourceBudget) =>
+        ResourceBudget? resourceBudget
+    ) =>
         Create(
             plan,
             file => new LocalFileCursor(openReader(pathOf(file)), resourceBudget),
@@ -62,7 +64,8 @@ sealed class CompactionStreams : IDisposable
         CompactionPlan plan,
         Func<FileMeta, ICompactionFileCursor> openFile,
         int maximumSourceStreams,
-        ResourceBudget? resourceBudget)
+        ResourceBudget? resourceBudget
+    )
     {
         ArgumentNullException.ThrowIfNull(plan);
         var sources = plan.Inputs.Where(file => file.Level == plan.SourceLevel).ToArray();
@@ -72,12 +75,14 @@ sealed class CompactionStreams : IDisposable
                            TryOrderDisjoint(sources, out var orderedSources)
             ? [orderedSources]
             : sources.Select(static file => new[] { file }).ToArray();
+
         if (sourceGroups.Length > maximumSourceStreams)
         {
             throw PantsException.ResourceLimit(
                 $"A compaction needs {sourceGroups.Length} simultaneous source streams, above the " +
                 $"limit of {maximumSourceStreams}.");
         }
+
 
         var targetGroups = targets.Length == 0
             ? []
@@ -91,11 +96,13 @@ sealed class CompactionStreams : IDisposable
     public static CompactionStreams CreateFromRuns(
         IReadOnlyList<IReadOnlyList<FileMeta>> runs,
         Func<FileMeta, ICompactionFileCursor> openFile,
-        ResourceBudget? resourceBudget)
+        ResourceBudget? resourceBudget
+    )
     {
         var streams = new List<ICompactionEntryStream>();
         var tombstones = new List<RangeTombstone>();
         var result = new CompactionStreams(streams, tombstones);
+
         try
         {
             foreach (var group in runs)
@@ -106,6 +113,7 @@ sealed class CompactionStreams : IDisposable
             foreach (var file in runs.SelectMany(static run => run))
             {
                 using var cursor = openFile(file);
+
                 foreach (var tombstone in cursor.RangeTombstones)
                 {
                     if (resourceBudget is not null)
@@ -135,14 +143,17 @@ sealed class CompactionStreams : IDisposable
     static bool TryOrderDisjoint(FileMeta[] files, out FileMeta[] ordered)
     {
         ordered = [.. files];
+
         if (files.Any(static file => !file.HasTrustedKeyBounds()))
         {
             return false;
         }
 
+
         Array.Sort(
             ordered,
             static (left, right) => left.SmallestKey!.AsSpan().SequenceCompareTo(right.SmallestKey));
+
         for (var index = 1; index < ordered.Length; index++)
         {
             if (ordered[index].SmallestKey!.AsSpan().SequenceCompareTo(ordered[index - 1].LargestKey) <= 0)
@@ -150,6 +161,7 @@ sealed class CompactionStreams : IDisposable
                 return false;
             }
         }
+
 
         return true;
     }

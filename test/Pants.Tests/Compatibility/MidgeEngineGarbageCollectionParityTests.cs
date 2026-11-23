@@ -21,12 +21,14 @@ public sealed class MidgeEngineGarbageCollectionParityTests
             await using var transaction = await database.Transactions.BeginAsync(
                 family,
                 PantsTransactionMode.ReadWrite);
+
             for (var index = 0; index < 25; index++)
             {
                 transaction.Put(
                     TestBytes.FromString($"key_{batch}_{index:0000}"),
                     TestBytes.FromString("v1"));
             }
+
 
             transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.Buffered);
@@ -55,6 +57,7 @@ public sealed class MidgeEngineGarbageCollectionParityTests
         await using var reader = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadOnly);
+
         for (var batch = 0; batch < 4; batch++)
         {
             for (var index = 0; index < 25; index++)
@@ -97,6 +100,7 @@ public sealed class MidgeEngineGarbageCollectionParityTests
 
             await database.Maintenance.FlushAsync(family);
             var layout = await database.Diagnostics.GetStorageLayoutAsync();
+
             foreach (var name in layout.Levels
                          .Where(static level => level.Level == 0)
                          .SelectMany(static level => level.Files)
@@ -108,11 +112,13 @@ public sealed class MidgeEngineGarbageCollectionParityTests
 
         Assert.NotEmpty(inputPaths);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+
         while (!inputPaths.Any(static path => !File.Exists(path)))
         {
             Assert.False(deadline.IsCancellationRequested, "Background compaction did not collect an L0 input.");
             await Task.Delay(200);
         }
+
 
         Assert.True((await database.Diagnostics.GetRuntimeMetricsAsync()).CompactionsRun > 0);
         await AssertRowsAsync(database, family, "interval_key_", 25, "v3");
@@ -161,12 +167,14 @@ public sealed class MidgeEngineGarbageCollectionParityTests
                 await using var transaction = await database.Transactions.BeginAsync(
                     family,
                     PantsTransactionMode.ReadWrite);
+
                 for (var index = 0; index < 30; index++)
                 {
                     transaction.Put(
                         TestBytes.FromString($"recovery_key_{index:0000}"),
                         TestBytes.FromString("recovery_value"));
                 }
+
 
                 await transaction.CommitAsync(WriteOptions(mode));
                 await database.ShutdownAsync(TestTimeouts.Expected);
@@ -202,11 +210,13 @@ public sealed class MidgeEngineGarbageCollectionParityTests
             }
 
             await database.Maintenance.FlushAsync(family);
+
             if (mode != "memory")
             {
                 var layout = await database.Diagnostics.GetStorageLayoutAsync();
                 Assert.NotEmpty(layout.Levels.SelectMany(static level => level.Files));
             }
+
 
             await AssertRowsAsync(database, family, "key_", 50, "value");
         }
@@ -232,11 +242,13 @@ public sealed class MidgeEngineGarbageCollectionParityTests
         IPantsColumnFamily family,
         string keyPrefix,
         int count,
-        string value)
+        string value
+    )
     {
         await using var reader = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < count; index++)
         {
             var key = TestBytes.FromString($"{keyPrefix}{index:0000}");

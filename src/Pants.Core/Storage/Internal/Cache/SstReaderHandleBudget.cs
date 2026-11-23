@@ -23,11 +23,13 @@ sealed class SstReaderHandleBudget
         while (true)
         {
             var before = Volatile.Read(ref _current);
+
             if (before >= Limit)
             {
                 reservation = null;
                 return false;
             }
+
 
             if (Interlocked.CompareExchange(ref _current, before + 1, before) == before)
             {

@@ -13,10 +13,12 @@ sealed class ScanBounds
         CacheFill = query.CacheFill ?? (query.Limit is <= 64
             ? PantsCacheFill.Normal
             : PantsCacheFill.Bypass);
+
         if (!Enum.IsDefined(Direction))
         {
             throw PantsException.InvalidArgument("Scan direction is invalid.");
         }
+
 
         if (Limit < 0)
         {
@@ -95,6 +97,7 @@ sealed class ScanBounds
         }
 
         var successor = prefix.ToArray();
+
         for (var index = successor.Length - 1; index >= 0; index--)
         {
             if (successor[index] == byte.MaxValue)
@@ -105,6 +108,7 @@ sealed class ScanBounds
             successor[index]++;
             return successor[..(index + 1)];
         }
+
 
         return null;
     }

@@ -26,7 +26,8 @@ sealed class WalRetirementProgress
     public WalSegmentProof Resume(
         ProviderPublishedWalSegment segment,
         string version,
-        WalCoverageIndex coverage)
+        WalCoverageIndex coverage
+    )
     {
         if (_proofs.TryGetValue(segment.SegmentId, out var proof) &&
             ProviderCloudPersistence.SameWalPublication(proof.Segment, segment) &&

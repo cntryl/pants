@@ -28,9 +28,11 @@ public sealed class PantsLocalDdlAuthorityTests
             Task operation = drop
                 ? database.ColumnFamilies.DropAsync(family!, cancellation.Token).AsTask()
                 : database.ColumnFamilies.CreateAsync("changed", cancellation.Token).AsTask();
+
             try
             {
                 await barrier.Entered.WaitAsync(TestTimeouts.Expected);
+
                 if (cancel)
                 {
                     cancellation.Cancel();
@@ -39,12 +41,14 @@ public sealed class PantsLocalDdlAuthorityTests
                 {
                     time.Advance(TimeSpan.FromSeconds(11));
                 }
+
                 await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(() => operation);
             }
             finally
             {
                 barrier.Release();
             }
+
 
             Assert.Equal(!drop, await database.ColumnFamilies.GetAsync("changed") is not null);
         }
@@ -107,6 +111,7 @@ public sealed class PantsLocalDdlAuthorityTests
             await Assert.ThrowsAsync<PantsIOException>(() => drop
                 ? database.ColumnFamilies.DropAsync(family).AsTask()
                 : (Task)database.ColumnFamilies.CreateAsync("changed").AsTask());
+
             if (drop)
             {
                 await database.ColumnFamilies.DropAsync(family);
@@ -175,6 +180,7 @@ public sealed class PantsLocalDdlAuthorityTests
             if (failpoint == Failpoint.BeforeManifestJournalSync && Interlocked.Exchange(ref _armed, 0) != 0)
             {
                 _entered.TrySetResult();
+
                 if (!_release.Wait(TestTimeouts.Expected))
                 {
                     throw new TimeoutException("DDL journal barrier was not released.");

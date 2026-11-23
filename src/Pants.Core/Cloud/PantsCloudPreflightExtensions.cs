@@ -9,7 +9,8 @@ public static class PantsCloudPreflightExtensions
     public static ValueTask<PantsCloudValidationReport> PreflightAsync(
         this PantsCloudStorageLocation location,
         PantsCloudPreflightOptions? options = null,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default
+    ) =>
         CloudConfigurationPreflight.RunAsync(location, options, cancellationToken);
 
     /// <summary>
@@ -18,6 +19,7 @@ public static class PantsCloudPreflightExtensions
     public static ValueTask<PantsCloudValidationReport> PreflightAsync(
         this PantsCloudStorageTopology topology,
         PantsCloudPreflightOptions? options = null,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default
+    ) =>
         CloudConfigurationPreflight.RunAsync(topology, options, cancellationToken);
 }

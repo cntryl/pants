@@ -70,13 +70,16 @@ public sealed class ProviderObjectStoreSetOpenConcurrencyTests
 
         public async ValueTask<IPantsCloudObjectStore> OpenObjectStoreAsync(
             PantsCloudProviderContext context,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+
             if (throwOnOpen)
             {
                 throw new InvalidOperationException("Simulated open failure.");
             }
+
 
             OpenedStore = new DisposalTrackingStore();
             return OpenedStore;
@@ -89,31 +92,36 @@ public sealed class ProviderObjectStoreSetOpenConcurrencyTests
 
         public ValueTask<PantsCloudObject?> GetAsync(
             string objectKey,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             throw new NotSupportedException("Not used by this test double.");
 
         public ValueTask<PantsCloudObjectMetadata?> HeadAsync(
             string objectKey,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             throw new NotSupportedException("Not used by this test double.");
 
         public ValueTask<bool> PutAsync(
             string objectKey,
             ReadOnlyMemory<byte> data,
             PantsCloudObjectWriteCondition condition,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             throw new NotSupportedException("Not used by this test double.");
 
         public ValueTask<PantsCloudObjectListPage> ListPageAsync(
             string prefix,
             string? continuationToken,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             throw new NotSupportedException("Not used by this test double.");
 
         public ValueTask<PantsCloudObjectDeleteOutcome> DeleteAsync(
             string objectKey,
             PantsCloudObjectDeleteCondition condition,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             throw new NotSupportedException("Not used by this test double.");
 
         public ValueTask DisposeAsync()

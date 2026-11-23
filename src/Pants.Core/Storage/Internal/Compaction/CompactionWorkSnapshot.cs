@@ -18,8 +18,10 @@ readonly record struct CompactionPublicationResult(
 
 delegate ValueTask<CompactionWorkSnapshot?> CompactionWorkSnapshotProvider(
     IReadOnlySet<uint> excludedFamilies,
-    CancellationToken cancellationToken);
+    CancellationToken cancellationToken
+);
 
 delegate ValueTask<CompactionPublicationResult> CompactionPublicationDispatcher(
     Func<CompactionPublicationResult> publish,
-    CancellationToken cancellationToken);
+    CancellationToken cancellationToken
+);

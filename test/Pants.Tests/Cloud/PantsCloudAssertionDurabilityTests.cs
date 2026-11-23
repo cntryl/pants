@@ -39,6 +39,7 @@ public sealed class PantsCloudAssertionDurabilityTests
         // Act
         var commit = confirming.CommitAsync(PantsWriteOptions.CloudStrict).AsTask();
         var entered = failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
+
         try
         {
             Assert.Same(entered, await Task.WhenAny(commit, entered));
@@ -49,6 +50,7 @@ public sealed class PantsCloudAssertionDurabilityTests
         {
             failpoint.Release();
         }
+
 
         await commit.WaitAsync(TestTimeouts.Expected);
 
@@ -94,12 +96,14 @@ public sealed class PantsCloudAssertionDurabilityTests
         await using var confirming = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
+
         if (assertValue)
         {
             confirming.AssertValue("key"u8.ToArray(), "value"u8.ToArray());
         }
 
         // Act
+
         await confirming.CommitAsync(PantsWriteOptions.CloudStrict);
 
         // Assert
@@ -146,6 +150,7 @@ public sealed class PantsCloudAssertionDurabilityTests
 
         // Act
         var commit = confirming.CommitAsync(PantsWriteOptions.CloudStrict).AsTask();
+
         try
         {
             await Assert.ThrowsAsync<TimeoutException>(() =>
@@ -155,6 +160,7 @@ public sealed class PantsCloudAssertionDurabilityTests
         {
             failpoint.Release();
         }
+
 
         await commit.WaitAsync(TestTimeouts.Expected);
 

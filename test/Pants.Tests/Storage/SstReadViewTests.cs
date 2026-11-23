@@ -295,15 +295,16 @@ public sealed class SstReadViewTests
         ulong sequence,
         string smallest,
         string largest,
-        uint columnFamilyId = 0) => new()
-        {
-            Name = name,
-            Level = level,
-            ColumnFamilyId = columnFamilyId,
-            SstSequence = sequence,
-            SizeBytes = 1024,
-            SmallestKey = System.Text.Encoding.UTF8.GetBytes(smallest),
-            LargestKey = System.Text.Encoding.UTF8.GetBytes(largest),
-            KeyBoundsComplete = true
-        };
+        uint columnFamilyId = 0
+    ) => new()
+    {
+        Name = name,
+        Level = level,
+        ColumnFamilyId = columnFamilyId,
+        SstSequence = sequence,
+        SizeBytes = 1024,
+        SmallestKey = System.Text.Encoding.UTF8.GetBytes(smallest),
+        LargestKey = System.Text.Encoding.UTF8.GetBytes(largest),
+        KeyBoundsComplete = true
+    };
 }

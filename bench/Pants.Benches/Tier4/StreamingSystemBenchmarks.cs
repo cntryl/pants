@@ -39,12 +39,15 @@ public class StreamingSystemBenchmarks : Tier4Benchmark
             while (true)
             {
                 var operation = Interlocked.Increment(ref _nextOperation);
+
                 if (operation >= OperationCount)
                 {
                     break;
                 }
 
+
                 var key = operation % 1_000;
+
                 if (worker < 2)
                 {
                     await Tier4Database.PutBatchAsync(

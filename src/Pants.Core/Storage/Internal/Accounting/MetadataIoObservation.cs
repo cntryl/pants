@@ -7,6 +7,7 @@ sealed class MetadataIoObservation(MetadataOperationLedger ledger, MetadataPaylo
     public static T Run<T>(MetadataIoObservation? observation, Func<T> operation)
     {
         observation?.Mutation();
+
         try
         {
             return operation();
@@ -20,6 +21,7 @@ sealed class MetadataIoObservation(MetadataOperationLedger ledger, MetadataPaylo
     public static void Run(MetadataIoObservation? observation, Action operation)
     {
         observation?.Mutation();
+
         try
         {
             operation();
@@ -34,10 +36,15 @@ sealed class MetadataIoObservation(MetadataOperationLedger ledger, MetadataPaylo
     public void Returned(ulong bytes) => ledger.Add((MetadataCounter)((int)MetadataCounter.SnapshotReturnedBytes + (int)payload), bytes);
     public void Mutation() => ledger.Mutation();
 
-    public async ValueTask WriteAsync(SafeFileHandle handle, ReadOnlyMemory<byte> bytes, long offset,
-        CancellationToken cancellationToken = default)
+    public async ValueTask WriteAsync(
+        SafeFileHandle handle,
+        ReadOnlyMemory<byte> bytes,
+        long offset,
+        CancellationToken cancellationToken = default
+    )
     {
         Issued((ulong)bytes.Length);
+
         try
         {
             await RandomAccess.WriteAsync(handle, bytes, offset, cancellationToken).ConfigureAwait(false);
@@ -53,6 +60,7 @@ sealed class MetadataIoObservation(MetadataOperationLedger ledger, MetadataPaylo
     public void Mutate(Action operation)
     {
         Mutation();
+
         try
         {
             operation();

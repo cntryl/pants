@@ -29,7 +29,8 @@ sealed class AsyncSstScanSource : IAsyncDisposable
         byte[]? endExclusive,
         ResourceBudget? resourceBudget,
         IDisposable? readerMetadataReservation,
-        SstScanBlockCache? blockCache)
+        SstScanBlockCache? blockCache
+    )
     {
         _reopenReader = reopenReader;
         _direction = direction;
@@ -75,10 +76,12 @@ sealed class AsyncSstScanSource : IAsyncDisposable
         byte[]? startInclusive,
         byte[]? endExclusive,
         ResourceBudget? resourceBudget,
-        SstScanBlockCache? blockCache = null)
+        SstScanBlockCache? blockCache = null
+    )
     {
         IDisposable? readerMetadataReservation = null;
         AsyncSstScanSource? source = null;
+
         try
         {
             readerMetadataReservation = reader.HasMetadataReservation
@@ -95,6 +98,7 @@ sealed class AsyncSstScanSource : IAsyncDisposable
                 readerMetadataReservation,
                 blockCache);
             readerMetadataReservation = null;
+
             if (reader.HasMetadataReservation)
             {
                 source._metadataReader = reader;
@@ -103,15 +107,18 @@ sealed class AsyncSstScanSource : IAsyncDisposable
             {
                 await reader.DisposeAsync().ConfigureAwait(false);
             }
+
             return source;
         }
         catch
         {
             readerMetadataReservation?.Dispose();
+
             if (source is not null)
             {
                 await source.DisposeAsync().ConfigureAwait(false);
             }
+
 
             await reader.DisposeAsync().ConfigureAwait(false);
             throw;
@@ -121,8 +128,12 @@ sealed class AsyncSstScanSource : IAsyncDisposable
     AsyncSstScanSource(
         FileMeta file,
         Func<CancellationToken, ValueTask<AsyncSstReader>> reopenReader,
-        PantsScanDirection direction, byte[]? startInclusive, byte[]? endExclusive,
-        ResourceBudget? resourceBudget, SstScanBlockCache? blockCache)
+        PantsScanDirection direction,
+        byte[]? startInclusive,
+        byte[]? endExclusive,
+        ResourceBudget? resourceBudget,
+        SstScanBlockCache? blockCache
+    )
     {
         _reopenReader = reopenReader;
         _direction = direction;
@@ -136,15 +147,21 @@ sealed class AsyncSstScanSource : IAsyncDisposable
     }
 
     public static AsyncSstScanSource CreateLazy(
-        FileMeta file, Func<CancellationToken, ValueTask<AsyncSstReader>> reopenReader,
-        PantsScanDirection direction, byte[]? startInclusive, byte[]? endExclusive,
-        ResourceBudget? resourceBudget, SstScanBlockCache? blockCache = null) =>
+        FileMeta file,
+        Func<CancellationToken, ValueTask<AsyncSstReader>> reopenReader,
+        PantsScanDirection direction,
+        byte[]? startInclusive,
+        byte[]? endExclusive,
+        ResourceBudget? resourceBudget,
+        SstScanBlockCache? blockCache = null
+    ) =>
         new(file, reopenReader, direction, startInclusive, endExclusive, resourceBudget, blockCache);
 
     public async ValueTask DisposeAsync()
     {
         var iterator = _iterator;
         _iterator = null;
+
         try
         {
             if (iterator is not null)
@@ -162,6 +179,7 @@ sealed class AsyncSstScanSource : IAsyncDisposable
                 _metadataReader = null;
                 await metadataReader.DisposeAsync().ConfigureAwait(false);
             }
+
             Interlocked.Exchange(ref _readerMetadataReservation, null)?.Dispose();
         }
     }
@@ -172,6 +190,7 @@ sealed class AsyncSstScanSource : IAsyncDisposable
         {
             return false;
         }
+
         if (_iterator is null)
         {
             _metadataReader ??= await _reopenReader(cancellationToken).ConfigureAwait(false);
@@ -187,10 +206,12 @@ sealed class AsyncSstScanSource : IAsyncDisposable
                 _blockCache);
         }
 
+
         if (await _iterator.MoveNextAsync(cancellationToken).ConfigureAwait(false))
         {
             return true;
         }
+
         _exhausted = true;
         return false;
     }

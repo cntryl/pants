@@ -43,7 +43,8 @@ public sealed class PantsUnsignedSequenceBoundaryTests
     [InlineData(true, true)]
     public async Task ShouldRetainUnsignedSnapshotAndRejectOverlappingWriteAfterNewerMutationWasFlushed(
         bool staleRange,
-        bool concurrentRangeDelete)
+        bool concurrentRangeDelete
+    )
     {
         using var directory = CopyHighSequenceFixture();
         var options = PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false);
@@ -54,6 +55,7 @@ public sealed class PantsUnsignedSequenceBoundaryTests
             {
                 await using var stale = await BeginWriteAsync(database);
                 stale.SetConflictPolicy(PantsConflictPolicy.AbortOnWriteConflict);
+
                 if (staleRange)
                 {
                     stale.DeleteRange("u64-"u8.ToArray(), "u64."u8.ToArray());
@@ -62,6 +64,7 @@ public sealed class PantsUnsignedSequenceBoundaryTests
                 {
                     stale.Put("u64-row"u8.ToArray(), "rejected"u8.ToArray());
                 }
+
 
                 await using (var newer = await BeginWriteAsync(database))
                 {
@@ -145,6 +148,7 @@ public sealed class PantsUnsignedSequenceBoundaryTests
     static async Task AssertCurrentRowsAsync(IPantsDatabase database, bool deleted)
     {
         await using var read = await BeginReadAsync(database);
+
         if (deleted)
         {
             Assert.Null(await read.GetAsync("u64-row"u8.ToArray()));
@@ -162,10 +166,12 @@ public sealed class PantsUnsignedSequenceBoundaryTests
     {
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
         var rows = new List<(string Key, string Value)>();
+
         await foreach (var row in scan)
         {
             rows.Add((TestBytes.ToText(row.Key), TestBytes.ToText(row.Value)));
         }
+
 
         return rows;
     }
@@ -181,12 +187,14 @@ public sealed class PantsUnsignedSequenceBoundaryTests
         var directory = new TemporaryDirectory();
         var source = Path.Combine(AppContext.BaseDirectory, "Fixtures", "Compatibility", "Midge",
             "c684310d9d8ce8ecd1151c47151d4bea98b348cf", "unsigned-sequence-high-sst");
+
         foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
         {
             var destination = Path.Combine(directory.Path, Path.GetRelativePath(source, file));
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
             File.Copy(file, destination);
         }
+
 
         return directory;
     }

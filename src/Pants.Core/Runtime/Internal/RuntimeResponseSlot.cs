@@ -16,7 +16,8 @@ sealed class RuntimeResponseSlot<T>
         RuntimeResponseRegistry registry,
         long requestId,
         string requestKind,
-        Action<T>? abandonedResponse = null)
+        Action<T>? abandonedResponse = null
+    )
     {
         _registry = registry;
         _requestId = requestId;

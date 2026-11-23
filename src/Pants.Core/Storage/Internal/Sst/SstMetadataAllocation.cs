@@ -35,6 +35,7 @@ sealed class SstMetadataAllocation : IDisposable
         }
 
         var retainedTotal = bytes;
+
         for (var index = 0; index < _claims.Count; index++)
         {
             var (claim, size) = _claims[index];
@@ -43,6 +44,7 @@ sealed class SstMetadataAllocation : IDisposable
             _claims[index] = (claim, retained);
             bytes -= retained;
         }
+
         _reserved = retainedTotal;
     }
 
@@ -55,7 +57,11 @@ sealed class SstMetadataAllocation : IDisposable
     }
 
     public async ValueTask<byte[]> ReadBlockAsync(
-        IAsyncSstSource source, long fileLength, SstBlockHandle handle, CancellationToken cancellationToken)
+        IAsyncSstSource source,
+        long fileLength,
+        SstBlockHandle handle,
+        CancellationToken cancellationToken
+    )
     {
         ValidateHandle(fileLength, handle);
         using var encodedClaim = _budget.Reserve(checked((long)handle.Size));
@@ -67,10 +73,12 @@ sealed class SstMetadataAllocation : IDisposable
     byte[] Decode(byte[] encoded)
     {
         var size = BinaryPrimitives.ReadUInt32LittleEndian(encoded);
+
         if (size != encoded.Length - 4)
         {
             throw new PantsCorruptionException("SST block length does not match its handle.");
         }
+
 
         var decodedSize = SstBlockCodec.GetDecodedSize(encoded.AsSpan(4));
         // Index/list/key and range/list/key allocations are bounded by this conservative parse
@@ -94,6 +102,7 @@ sealed class SstMetadataAllocation : IDisposable
         {
             claim.Dispose();
         }
+
         _claims.Clear();
     }
 }

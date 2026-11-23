@@ -29,6 +29,7 @@ public sealed class PantsManualCompactionDeadlineTests
                          new RuntimeDependencies(held, runtimeTimeProvider: clock)))
         {
             var compact = database.Maintenance.CompactAllAsync().AsTask();
+
             try
             {
                 await held.WaitUntilBlockedAsync();
@@ -47,6 +48,7 @@ public sealed class PantsManualCompactionDeadlineTests
             finally
             {
                 held.Release();
+
                 try
                 {
                     await compact.WaitAsync(TestTimeouts.Expected);
@@ -55,6 +57,7 @@ public sealed class PantsManualCompactionDeadlineTests
                 {
                 }
             }
+
             await database.Maintenance.CompactAllAsync();
             Assert.Equal(0, (await database.Diagnostics.GetRuntimeMetricsAsync()).HybridStorageBudget!.Usage.CompactionStagingReservedBytes);
             await database.ShutdownAsync(TestTimeouts.Expected);
@@ -89,6 +92,7 @@ public sealed class PantsManualCompactionDeadlineTests
                          new RuntimeDependencies(held, runtimeTimeProvider: clock)))
         {
             var background = Task.CompletedTask;
+
             if (pendingFlush)
             {
                 await PutAsync(database, "pending", [3]);
@@ -98,7 +102,9 @@ public sealed class PantsManualCompactionDeadlineTests
                 background = database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily).AsTask();
                 await held.WaitUntilBlockedAsync();
             }
+
             var compact = database.Maintenance.CompactAllAsync().AsTask();
+
             try
             {
                 if (pendingFlush)
@@ -109,6 +115,7 @@ public sealed class PantsManualCompactionDeadlineTests
                 {
                     await held.WaitForManualAdmissionAsync();
                 }
+
                 clock.Advance(TimeSpan.FromSeconds(1));
 
                 await Assert.ThrowsAsync<PantsTimeoutException>(() => compact.WaitAsync(TimeSpan.FromSeconds(2)));
@@ -119,6 +126,7 @@ public sealed class PantsManualCompactionDeadlineTests
             finally
             {
                 held.Release();
+
                 try
                 {
                     await compact.WaitAsync(TestTimeouts.Expected);
@@ -126,6 +134,7 @@ public sealed class PantsManualCompactionDeadlineTests
                 catch (PantsException)
                 {
                 }
+
                 try
                 {
                     await background.WaitAsync(TestTimeouts.Expected);
@@ -134,6 +143,7 @@ public sealed class PantsManualCompactionDeadlineTests
                 {
                 }
             }
+
             await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
@@ -157,10 +167,12 @@ public sealed class PantsManualCompactionDeadlineTests
     {
         await using var reader = await database.Transactions.BeginAsync(database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 3; index++)
         {
             Assert.Equal(new[] { (byte)index }, (await reader.GetAsync(TestBytes.FromString($"row-{index}")))?.ToArray());
         }
+
         Assert.Equal(pendingFlush ? new byte[] { 3 } : null, (await reader.GetAsync("pending"u8.ToArray()))?.ToArray());
         Assert.Equal(new byte[] { 2 }, (await reader.GetAsync("shared"u8.ToArray()))?.ToArray());
     }
@@ -179,11 +191,15 @@ public sealed class PantsManualCompactionDeadlineTests
             {
                 _manual.TrySetResult();
             }
+
+
             if (failpoint != target)
             {
                 return;
             }
+
             _blocked.TrySetResult();
+
             if (!_release.Wait(TestTimeouts.Expected))
             {
                 throw new TimeoutException("The held physical maintenance operation was not released.");

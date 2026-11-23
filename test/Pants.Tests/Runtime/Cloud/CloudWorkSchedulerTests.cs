@@ -18,6 +18,7 @@ public sealed class CloudWorkSchedulerTests
             async cancellationToken =>
             {
                 var execution = Interlocked.Increment(ref executions);
+
                 if (execution == 1)
                 {
                     firstStarted.SetResult();
@@ -31,10 +32,12 @@ public sealed class CloudWorkSchedulerTests
 
         scheduler.Signal();
         await firstStarted.Task.WaitAsync(TestTimeouts.Expected);
+
         for (var index = 0; index < 100; index++)
         {
             scheduler.Signal();
         }
+
 
         releaseFirst.SetResult();
         await secondCompleted.Task.WaitAsync(TestTimeouts.Expected);
@@ -93,6 +96,7 @@ public sealed class CloudWorkSchedulerTests
                 }
 
                 secondStarted.SetResult();
+
                 try
                 {
                     await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
@@ -143,6 +147,7 @@ public sealed class CloudWorkSchedulerTests
     static async Task WaitForIdleAsync(CloudWorkScheduler scheduler)
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         while (scheduler.Outstanding != 0)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(5), timeout.Token);

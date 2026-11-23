@@ -191,10 +191,12 @@ public sealed class MidgeTransactionIsolationParityTests
         {
             await using var database = await OpenAsync(mode, path);
             await PutAsync(database, mode, "key", "initial");
+
             for (var index = 1; index <= 5; index++)
             {
                 await PutAsync(database, mode, "key", $"v{index}");
             }
+
 
             Assert.Equal("v5", await ReadAsync(database, "key"));
         });
@@ -213,6 +215,7 @@ public sealed class MidgeTransactionIsolationParityTests
             });
 
             await using var reader = await BeginReadAsync(database);
+
             for (var index = 0; index < 20; index++)
             {
                 Assert.Equal($"value{index}", TestBytes.ToText((await reader.GetAsync(
@@ -227,23 +230,28 @@ public sealed class MidgeTransactionIsolationParityTests
         await ForEachModeAsync(AllModes, async (mode, path) =>
         {
             await using var database = await OpenAsync(mode, path);
+
             for (var index = 0; index < 10; index++)
             {
                 await PutAsync(database, mode, $"key{index}", $"value{index}");
             }
 
+
             var observations = await RunWorkersAsync(50, async _ =>
             {
                 var values = new string[10];
+
                 for (var index = 0; index < values.Length; index++)
                 {
                     values[index] = await ReadAsync(database, $"key{index}") ?? "<missing>";
                 }
 
+
                 return values;
             });
 
             Assert.Equal(50, observations.Length);
+
             foreach (var observation in observations)
             {
                 Assert.Equal(Enumerable.Range(0, 10).Select(static index => $"value{index}"), observation);
@@ -268,10 +276,12 @@ public sealed class MidgeTransactionIsolationParityTests
             {
                 await start.Task;
                 var observations = new (int Index, string? Value)[5];
+
                 for (var index = 0; index < observations.Length; index++)
                 {
                     observations[index] = (index, await ReadAsync(database, $"key{index}"));
                 }
+
 
                 return observations;
             });
@@ -298,7 +308,8 @@ public sealed class MidgeTransactionIsolationParityTests
 
     static async Task<T[]> RunWorkersAsync<T>(
         int workerCount,
-        Func<int, Task<T>> worker)
+        Func<int, Task<T>> worker
+    )
     {
         var workers = Enumerable.Range(0, workerCount)
             .Select(index => Task.Run(() => worker(index)))

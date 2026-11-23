@@ -62,6 +62,7 @@ sealed class ManualSchedulingTimeProvider : TimeProvider
         lock (_gate)
         {
             ManualTimer? next = null;
+
             foreach (var candidate in _timers)
             {
                 if (candidate.DueTimestamp is { } due &&
@@ -72,12 +73,14 @@ sealed class ManualSchedulingTimeProvider : TimeProvider
                 }
             }
 
+
             if (next?.DueTimestamp is not { } fireAt)
             {
                 return null;
             }
 
             _timestamp = Math.Max(_timestamp, fireAt);
+
             if (next.PeriodTicks is { } period && period > 0)
             {
                 next.DueTimestamp = fireAt + period;
@@ -86,6 +89,7 @@ sealed class ManualSchedulingTimeProvider : TimeProvider
             {
                 next.DueTimestamp = null;
             }
+
 
             return next;
         }
@@ -99,6 +103,7 @@ sealed class ManualSchedulingTimeProvider : TimeProvider
                 ? null
                 : _timestamp + dueTime.Ticks;
             timer.PeriodTicks = period == Timeout.InfiniteTimeSpan ? null : period.Ticks;
+
             if (!_timers.Contains(timer))
             {
                 _timers.Add(timer);

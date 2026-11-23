@@ -260,7 +260,8 @@ public sealed class PantsLocalWalPruningTests
         RuntimeState state,
         long transactionId,
         ColumnFamilyIdentity family,
-        string key)
+        string key
+    )
     {
         var operation = new TransactionIntentOperation(
             0,
@@ -291,7 +292,8 @@ public sealed class PantsLocalWalPruningTests
         IPantsDatabase database,
         IPantsColumnFamily family,
         string key,
-        int valueBytes)
+        int valueBytes
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,

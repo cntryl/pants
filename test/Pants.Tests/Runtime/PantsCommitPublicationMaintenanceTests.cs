@@ -22,6 +22,7 @@ public sealed class PantsCommitPublicationMaintenanceTests
         failpoints.Arm();
         await empty.RollbackAsync();
         await failpoints.Entered.WaitAsync(TestTimeouts.Expected);
+
         try
         {
             Assert.True(File.Exists(retainedFile));
@@ -33,6 +34,7 @@ public sealed class PantsCommitPublicationMaintenanceTests
         }
 
         // The first barrier can precede the successor enqueued by the paused collection.
+
         _ = await database.Diagnostics.GetStorageLayoutAsync();
         _ = await database.Diagnostics.GetStorageLayoutAsync();
         Assert.False(File.Exists(retainedFile));
@@ -55,6 +57,7 @@ public sealed class PantsCommitPublicationMaintenanceTests
         failpoints.Arm();
         await firstSnapshot.DisposeAsync();
         await failpoints.Entered.WaitAsync(TestTimeouts.Expected);
+
         try
         {
             var retainedFile = Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
@@ -96,20 +99,24 @@ public sealed class PantsCommitPublicationMaintenanceTests
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             await using var pinned = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
+
             for (var generation = 1; generation <= 2; generation++)
             {
                 await PutAsync(database, "version", $"new-{generation}");
                 await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             }
 
+
             await database.Maintenance.CompactAllAsync();
             Assert.True((await database.Diagnostics.GetRuntimeMetricsAsync()).PinnedSsts > 0);
             failpoints.Snapshot = pinned;
             var commitFailure = await Record.ExceptionAsync(() => PutAsync(database, "accepted", "value"));
+
             if (failpoints.Release is { } release)
             {
                 _ = await Record.ExceptionAsync(() => release);
             }
+
             _ = await database.Diagnostics.GetStorageLayoutAsync();
 
             await using var current = await database.Transactions.BeginAsync(
@@ -177,6 +184,7 @@ public sealed class PantsCommitPublicationMaintenanceTests
                 Interlocked.Exchange(ref _armed, 0) != 0)
             {
                 _entered.TrySetResult();
+
                 if (!_release.Wait(TestTimeouts.Expected))
                 {
                     throw new TimeoutException("The publication collection response was not released.");

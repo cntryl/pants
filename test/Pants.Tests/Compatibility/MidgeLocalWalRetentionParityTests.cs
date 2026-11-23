@@ -204,6 +204,7 @@ public sealed class MidgeLocalWalRetentionParityTests
         for (var round = 0; round < 20; round++)
         {
             var key = $"busy-{round:000}";
+
             for (var index = 0; index < 5; index++)
             {
                 await PutAsync(
@@ -212,6 +213,7 @@ public sealed class MidgeLocalWalRetentionParityTests
                     withDeletes ? key : $"{key}-{index}",
                     incompressibleValue: true);
             }
+
 
             if (withDeletes)
             {
@@ -233,6 +235,7 @@ public sealed class MidgeLocalWalRetentionParityTests
         await database.DisposeAsync();
         await using var reopened = await PantsDatabase.OpenAsync(RetentionOpenOptions(path));
         await AssertKeyPresentAsync(reopened, "idle", "idle-key");
+
         if (withDeletes)
         {
             await AssertKeyAbsentAsync(reopened, reopened.ColumnFamilies.DefaultFamily, "busy-019");
@@ -300,7 +303,8 @@ public sealed class MidgeLocalWalRetentionParityTests
         long transactionId,
         ColumnFamilyIdentity family,
         CommitOperationKind operationKind,
-        string key)
+        string key
+    )
     {
         var operation = new TransactionIntentOperation(
             0,
@@ -385,7 +389,8 @@ public sealed class MidgeLocalWalRetentionParityTests
         IPantsDatabase database,
         IPantsColumnFamily family,
         string key,
-        bool incompressibleValue = false)
+        bool incompressibleValue = false
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,
@@ -402,7 +407,8 @@ public sealed class MidgeLocalWalRetentionParityTests
         IPantsDatabase database,
         IPantsColumnFamily family,
         string prefix,
-        Dictionary<string, byte[]> expected)
+        Dictionary<string, byte[]> expected
+    )
     {
         for (var round = 0; round < 6; round++)
         {
@@ -428,7 +434,8 @@ public sealed class MidgeLocalWalRetentionParityTests
         IPantsColumnFamily family,
         string key,
         byte[] value,
-        PantsWriteOptions writeOptions)
+        PantsWriteOptions writeOptions
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,
@@ -439,18 +446,21 @@ public sealed class MidgeLocalWalRetentionParityTests
 
     static async Task AssertRetainedValuesAsync(
         IPantsDatabase database,
-        IReadOnlyDictionary<string, byte[]> expected)
+        IReadOnlyDictionary<string, byte[]> expected
+    )
     {
         var family = database.ColumnFamilies.DefaultFamily;
         await using var reader = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadOnly);
+
         foreach (var (key, expectedValue) in expected)
         {
             var actual = await reader.GetAsync(TestBytes.FromString(key));
             Assert.NotNull(actual);
             Assert.Equal(expectedValue, actual.Value.ToArray());
         }
+
 
         Assert.Null(await reader.GetAsync(TestBytes.FromString("deleted")));
     }
@@ -461,10 +471,12 @@ public sealed class MidgeLocalWalRetentionParityTests
         // retention pressure, so keep the 1 KiB fixture size with deterministic incompressible data.
         var value = new byte[1024];
         var state = 2166136261u;
+
         foreach (var character in key)
         {
             state = unchecked((state ^ character) * 16777619u);
         }
+
 
         if (state == 0)
         {
@@ -485,7 +497,8 @@ public sealed class MidgeLocalWalRetentionParityTests
     static async Task DeletePointAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,
-        string key)
+        string key
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,
@@ -497,11 +510,13 @@ public sealed class MidgeLocalWalRetentionParityTests
     static async Task DeleteAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,
-        DeleteKind deleteKind)
+        DeleteKind deleteKind
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadWrite);
+
         switch (deleteKind)
         {
             case DeleteKind.Point:
@@ -517,6 +532,7 @@ public sealed class MidgeLocalWalRetentionParityTests
                 throw new ArgumentOutOfRangeException(nameof(deleteKind), deleteKind, null);
         }
 
+
         await transaction.CommitAsync(
             deleteKind == DeleteKind.BestEffortPoint
                 ? PantsWriteOptions.BestEffort
@@ -525,7 +541,8 @@ public sealed class MidgeLocalWalRetentionParityTests
 
     static async Task AssertKeyAbsentAsync(
         IPantsDatabase database,
-        IPantsColumnFamily family)
+        IPantsColumnFamily family
+    )
     {
         await using var reader = await database.Transactions.BeginAsync(
             family,
@@ -536,7 +553,8 @@ public sealed class MidgeLocalWalRetentionParityTests
     static async Task AssertKeyAbsentAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,
-        string key)
+        string key
+    )
     {
         await using var reader = await database.Transactions.BeginAsync(
             family,
@@ -547,7 +565,8 @@ public sealed class MidgeLocalWalRetentionParityTests
     static async Task AssertKeyPresentAsync(
         IPantsDatabase database,
         string familyName,
-        string key)
+        string key
+    )
     {
         var family = (await database.ColumnFamilies.GetAsync(familyName))!;
         await using var reader = await database.Transactions.BeginAsync(
@@ -561,6 +580,7 @@ public sealed class MidgeLocalWalRetentionParityTests
     static void CopyCrashImage(string source, string destination)
     {
         Directory.CreateDirectory(destination);
+
         foreach (var sourceDirectory in Directory.EnumerateDirectories(
                      source,
                      "*",
@@ -571,16 +591,19 @@ public sealed class MidgeLocalWalRetentionParityTests
                 Path.GetRelativePath(source, sourceDirectory)));
         }
 
+
         foreach (var sourceFile in Directory.EnumerateFiles(
                      source,
                      "*",
                      SearchOption.AllDirectories))
         {
             var relativePath = Path.GetRelativePath(source, sourceFile);
+
             if (relativePath is "LOCK" or ".midge_leader.lock")
             {
                 continue;
             }
+
 
             var destinationFile = Path.Combine(destination, relativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(destinationFile)!);
@@ -600,6 +623,7 @@ public sealed class MidgeLocalWalRetentionParityTests
         // and the later seal were not part of this captured durability boundary.
         File.WriteAllBytes(walPath, syncedPrefix);
         File.WriteAllBytes(Path.Combine(directory, "LEDGER"), syncedLedger);
+
         foreach (var file in Directory.GetFiles(directory, "*.wal"))
         {
             if (ulong.Parse(Path.GetFileNameWithoutExtension(file), CultureInfo.InvariantCulture) > segmentId)

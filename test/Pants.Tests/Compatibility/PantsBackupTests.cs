@@ -64,6 +64,7 @@ public sealed class PantsBackupTests
             var writer = Task.Run(async () =>
             {
                 ulong next = 1;
+
                 while (!running.IsCancellationRequested)
                 {
                     await CommitAsync(
@@ -86,6 +87,7 @@ public sealed class PantsBackupTests
 
             await writerStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
             PantsBackupManifest manifest;
+
             try
             {
                 manifest = await source.BackupAsync(artifactPath, TimeSpan.FromSeconds(10));
@@ -95,6 +97,7 @@ public sealed class PantsBackupTests
                 running.Cancel();
                 await writer;
             }
+
 
             Assert.True(manifest.DurabilityFrontier > 0);
         }
@@ -114,6 +117,7 @@ public sealed class PantsBackupTests
         var encodedFrontier = await checkpointReader.GetAsync("frontier"u8.ToArray());
         Assert.NotNull(encodedFrontier);
         var frontier = BinaryPrimitives.ReadUInt64BigEndian(encodedFrontier!.Value.Span);
+
         for (ulong sequence = 0; sequence <= frontier; sequence++)
         {
             Assert.Equal(
@@ -483,10 +487,12 @@ public sealed class PantsBackupTests
             await using var source = await PantsDatabase.OpenForTestingAsync(
                 PantsOpenOptions.Local(sourcePath),
                 new RuntimeDependencies(failpoints: handler));
+
             if (restore)
             {
                 await source.BackupAsync(artifactPath, TimeSpan.FromSeconds(10));
             }
+
 
             var result = restore
                 ? PantsDatabase.RestoreBackupForTestingAsync(
@@ -528,10 +534,12 @@ public sealed class PantsBackupTests
             await using var source = await PantsDatabase.OpenForTestingAsync(
                 PantsOpenOptions.Local(sourcePath),
                 new RuntimeDependencies(failpoints: handler));
+
             if (restore)
             {
                 await source.BackupAsync(artifactPath, TimeSpan.FromSeconds(10));
             }
+
 
             var result = restore
                 ? PantsDatabase.RestoreBackupForTestingAsync(
@@ -572,6 +580,7 @@ public sealed class PantsBackupTests
             "yes"u8.ToArray(),
             retryBusy: true).AsTask();
         Exception? writeFailure = null;
+
         try
         {
             await write.WaitAsync(TimeSpan.FromSeconds(5));
@@ -584,6 +593,7 @@ public sealed class PantsBackupTests
         {
             handler.Release();
         }
+
 
         var manifest = await backup;
         await write;
@@ -731,7 +741,8 @@ public sealed class PantsBackupTests
         byte[] key,
         byte[] value,
         PantsWriteOptions? options = null,
-        bool retryBusy = false)
+        bool retryBusy = false
+    )
     {
         do
         {
@@ -754,7 +765,8 @@ public sealed class PantsBackupTests
     static async ValueTask<byte[]> ReadAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,
-        byte[] key)
+        byte[] key
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,

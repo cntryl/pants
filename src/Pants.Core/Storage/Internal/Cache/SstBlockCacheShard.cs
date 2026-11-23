@@ -77,11 +77,13 @@ sealed class SstBlockCacheShard
 
             var ownedContent = content.ToArray();
             var entry = new SstBlockCacheEntry(ownedContent);
+
             if (!_entries.TryAdd(key, entry))
             {
                 _policy.RecordAccess(key);
                 return true;
             }
+
 
             _usedBytes = checked(_usedBytes + entry.SizeBytes);
             _policy.RecordAccess(key);
@@ -108,6 +110,7 @@ sealed class SstBlockCacheShard
     bool TryEvictOne()
     {
         var maximumAttempts = checked(_entries.Count + 1);
+
         for (var attempt = 0; attempt < maximumAttempts; attempt++)
         {
             if (!_policy.TrySelectVictim(out var victim))
@@ -124,6 +127,7 @@ sealed class SstBlockCacheShard
 
             _policy.RecordStale(victim);
         }
+
 
         return false;
     }

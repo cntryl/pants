@@ -148,10 +148,12 @@ public sealed class PantsStorageModeBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await StorageModeTestHarness.OpenAsync(mode, directory.Path);
+
         for (var index = 0; index < 100; index++)
         {
             await StorageModeTestHarness.PutAsync(database, mode, $"key-{index}", $"value-{index}");
         }
+
 
         for (var index = 0; index < 100; index++)
         {
@@ -169,10 +171,12 @@ public sealed class PantsStorageModeBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await StorageModeTestHarness.OpenAsync(mode, directory.Path);
+
         for (var index = 0; index < 50; index++)
         {
             await StorageModeTestHarness.PutAsync(database, mode, $"artifact-{index}", "value");
         }
+
 
         Assert.Equal("value", await StorageModeTestHarness.GetTextAsync(database, "artifact-0"));
         Assert.Equal("value", await StorageModeTestHarness.GetTextAsync(database, "artifact-49"));

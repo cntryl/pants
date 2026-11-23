@@ -15,10 +15,12 @@ static class CloudTestMetadata
             ["FORMAT"] = "midge-format-version=9\n"u8.ToArray(),
             ["manifest.snapshot.json"] = manifestBytes
         };
+
         if (intentBytes is not null)
         {
             files.Add("intent_log.json", intentBytes);
         }
+
 
         foreach (var file in files)
         {

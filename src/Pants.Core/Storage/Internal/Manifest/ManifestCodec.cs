@@ -19,11 +19,13 @@ static class ManifestCodec
             writer.WriteNumber("edit_checkpoint_id", manifest.EditCheckpointId);
             writer.WritePropertyName("flushed_through");
             new FlushFrontierMapConverter().Write(writer, manifest.FlushedThrough, options);
+
             if (manifest.RetiredSsts.Count != 0)
             {
                 writer.WritePropertyName("retired_ssts");
                 JsonSerializer.Serialize(writer, manifest.RetiredSsts, options);
             }
+
 
             writer.WriteEndObject();
         }
@@ -58,6 +60,7 @@ static class ManifestCodec
         }
 
         var manifest = root.Deserialize<ManifestState>(options) ?? throw new PantsCorruptionException("Manifest is empty.");
+
         if (manifest.Files is null || manifest.ColumnFamilies is null || manifest.NextSstSeqs is null ||
             manifest.RetiredSsts is null || manifest.FlushedThrough is null ||
             manifest.Files.Any(static file => file is null) || manifest.ColumnFamilies.Any(static family => family is null) ||
@@ -66,7 +69,9 @@ static class ManifestCodec
             throw new PantsCorruptionException("Manifest authority contains a null collection or identity.");
         }
 
+
         var liveNames = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var family in manifest.ColumnFamilies)
         {
             if (family.Name is null or "default" || family.DroppedSstNames is null ||
@@ -79,6 +84,7 @@ static class ManifestCodec
                 throw new PantsCorruptionException("Manifest column-family lifecycle is inconsistent.");
             }
         }
+
 
         if (manifest.ColumnFamilies.Any(static family => family.Id == 0) ||
             manifest.ColumnFamilies.Select(static family => family.Id).Distinct().Count() != manifest.ColumnFamilies.Count ||

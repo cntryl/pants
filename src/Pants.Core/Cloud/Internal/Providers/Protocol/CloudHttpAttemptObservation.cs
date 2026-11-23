@@ -18,10 +18,12 @@ sealed class CloudHttpAttemptObservation : IDisposable
         _activity = PantsDiagnostics.ActivitySource.StartActivity(
             "Pants.Cloud.HttpAttempt",
             ActivityKind.Client);
+
         if (_activity is null)
         {
             return;
         }
+
 
         _activity.SetTag(TagPrefix + "method", request.Method.Method);
         _activity.SetTag(TagPrefix + "range", request.Headers.Range is not null);

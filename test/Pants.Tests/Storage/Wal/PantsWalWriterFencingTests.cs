@@ -317,6 +317,7 @@ public sealed class PantsWalWriterFencingTests
             Assert.Equal(
                 PantsEngineHealth.Degraded,
                 (await database.Diagnostics.GetRuntimeMetricsAsync()).Health);
+
             foreach (var options in new[] { PantsWriteOptions.Sync, PantsWriteOptions.Buffered })
             {
                 var fenced = await Assert.ThrowsAsync<PantsFencedException>(() =>
@@ -324,6 +325,7 @@ public sealed class PantsWalWriterFencingTests
                         transaction.Put(Key("follow-up"), Value("rejected"))));
                 Assert.Equal(PantsErrorCode.Fenced, fenced.Code);
             }
+
 
             await AssertAcknowledgedRowsAsync(database);
             Assert.Null(await ReadAsync(database, "follow-up"));
@@ -436,6 +438,7 @@ public sealed class PantsWalWriterFencingTests
         using var directory = new TemporaryDirectory();
         var failpoints = new ShutdownBoundarySyncFailureFailpointHandler();
         var database = await OpenAsync(directory.Path, failpoints);
+
         try
         {
             await CommitAsync(database, PantsWriteOptions.Buffered, static transaction =>
@@ -483,7 +486,8 @@ public sealed class PantsWalWriterFencingTests
     static async Task CommitAsync(
         IPantsDatabase database,
         PantsWriteOptions options,
-        Action<IPantsTransaction> stage)
+        Action<IPantsTransaction> stage
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,

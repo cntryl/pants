@@ -265,13 +265,18 @@ public sealed class WalRecoveryStateMachineTests
     static void Visit(
         WalRecoveryStateMachine recovery,
         List<(WalMutation Mutation, ulong CommitSequence)> applied,
-        params byte[][] payloads)
+        params byte[][] payloads
+    )
     {
         VisitAtEpoch(recovery, applied, 7, payloads);
     }
 
-    static void VisitAtEpoch(WalRecoveryStateMachine recovery,
-        List<(WalMutation Mutation, ulong CommitSequence)> applied, ulong epoch, params byte[][] payloads)
+    static void VisitAtEpoch(
+        WalRecoveryStateMachine recovery,
+        List<(WalMutation Mutation, ulong CommitSequence)> applied,
+        ulong epoch,
+        params byte[][] payloads
+    )
     {
         var bytes = Frame(payloads, epoch);
         WalFrameReader.Visit(
@@ -286,12 +291,14 @@ public sealed class WalRecoveryStateMachineTests
         using var stream = new MemoryStream();
         var firstSequence = payloads.Min(static payload => WalCodec.GetSequenceStart(WalCodec.DecodeRecord(payload)));
         stream.Write(WalSegmentCodec.EncodeHeader(new WalOpenFacts(1, epoch, firstSequence, WalChainLink.Genesis), Guid.Parse("00000000-0000-0000-0000-000000000001")));
+
         foreach (var payload in payloads)
         {
             DiskFormat.WriteUInt32(stream, checked((uint)payload.Length));
             DiskFormat.WriteUInt32(stream, DiskFormat.Crc32C(payload));
             stream.Write(payload);
         }
+
 
         return stream.ToArray();
     }

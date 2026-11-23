@@ -15,13 +15,16 @@ sealed class TransactionMemoryPool
     public bool TryReserve(long bytes)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(bytes);
+
         while (true)
         {
             var observed = Volatile.Read(ref _used);
+
             if (bytes > _capacity - observed)
             {
                 return false;
             }
+
 
             if (Interlocked.CompareExchange(ref _used, observed + bytes, observed) == observed)
             {
@@ -34,6 +37,7 @@ sealed class TransactionMemoryPool
     {
         ArgumentOutOfRangeException.ThrowIfNegative(bytes);
         var remaining = Interlocked.Add(ref _used, -bytes);
+
         if (remaining < 0)
         {
             Interlocked.Exchange(ref _used, 0);

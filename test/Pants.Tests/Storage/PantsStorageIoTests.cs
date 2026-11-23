@@ -230,6 +230,7 @@ public sealed class PantsStorageIoTests
             () =>
             {
                 attempts++;
+
                 switch (attempts)
                 {
                     case 1:

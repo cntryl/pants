@@ -6,7 +6,8 @@ static class CloudProviderTestFactory
         string provider,
         HttpClient client,
         TimeSpan? operationTimeout = null,
-        string prefix = "")
+        string prefix = ""
+    )
     {
         var endpoint = new Uri("https://storage.example.test");
         IPantsCloudProvider configuration = provider switch

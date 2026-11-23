@@ -23,11 +23,13 @@ sealed class CoalescedCommitSyncFailureFailpointHandler : IFailpointHandler, IDi
             Interlocked.Exchange(ref _runtimeBarrierArmed, 0) == 1)
         {
             _runtimeBarrierEntered.TrySetResult();
+
             if (!_runtimeBarrierRelease.Wait(MaximumBlockTime))
             {
                 throw new TimeoutException(
                     $"Timed out waiting to release {Failpoint.BeforeRuntimeMetricsResponse}.");
             }
+
 
             return;
         }

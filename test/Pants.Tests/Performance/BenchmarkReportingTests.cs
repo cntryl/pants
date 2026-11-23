@@ -356,7 +356,8 @@ public sealed class BenchmarkReportingTests
         string sourceSha,
         string name = "point read",
         string parametersJson = "{ \"storage\": \"local\", \"clients\": \"16\" }",
-        int tier = 2) => $$"""
+        int tier = 2
+    ) => $$"""
                                                    {
                                                      "schema_version": "cntryl-stress.v2",
                                                      "tool_version": "0.4.0",

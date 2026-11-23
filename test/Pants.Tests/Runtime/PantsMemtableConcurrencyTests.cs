@@ -16,15 +16,18 @@ public sealed class PantsMemtableConcurrencyTests
 
         var writerStarted = false;
         var observed = new List<string>();
+
         await foreach (var entry in scan)
         {
             observed.Add($"{TestBytes.ToText(entry.Key)}:{TestBytes.ToText(entry.Value)}");
+
             if (!writerStarted)
             {
                 writerStarted = true;
                 await WriteGenerationAsync(database, "new").WaitAsync(TestTimeouts.Expected);
             }
         }
+
 
         Assert.True(writerStarted);
         Assert.Equal(
@@ -55,10 +58,12 @@ public sealed class PantsMemtableConcurrencyTests
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
+
         for (var index = 0; index < 100; index++)
         {
             transaction.Put(TestBytes.FromString($"key-{index:000}"), TestBytes.FromString(value));
         }
+
 
         await transaction.CommitAsync(PantsWriteOptions.Buffered);
     }

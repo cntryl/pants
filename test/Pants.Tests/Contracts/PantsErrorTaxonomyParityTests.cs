@@ -69,6 +69,7 @@ public sealed class PantsErrorTaxonomyParityTests
     {
         using var directory = new TemporaryDirectory();
         var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
+
         try
         {
             var failure = await Assert.ThrowsAsync<PantsTimeoutException>(() =>

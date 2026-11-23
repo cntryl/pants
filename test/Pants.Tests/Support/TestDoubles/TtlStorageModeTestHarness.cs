@@ -5,13 +5,15 @@ static class TtlStorageModeTestHarness
     internal static ValueTask<IPantsDatabase> OpenAsync(
         TtlStorageMode mode,
         string path,
-        IPantsClock clock) =>
+        IPantsClock clock
+    ) =>
         PantsDatabase.OpenAsync(CreateOptions(mode, path, clock));
 
     internal static PantsOpenOptions CreateOptions(
         TtlStorageMode mode,
         string path,
-        IPantsClock clock) =>
+        IPantsClock clock
+    ) =>
         (mode switch
         {
             TtlStorageMode.Memory => PantsOpenOptions.InMemory(),
@@ -33,7 +35,8 @@ static class TtlStorageModeTestHarness
         TtlStorageMode mode,
         ReadOnlyMemory<byte> key,
         ReadOnlyMemory<byte> value,
-        TimeSpan? timeToLive)
+        TimeSpan? timeToLive
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -47,7 +50,8 @@ static class TtlStorageModeTestHarness
         TtlStorageMode mode,
         string key,
         string value,
-        TimeSpan? timeToLive) =>
+        TimeSpan? timeToLive
+    ) =>
         await PutAsync(
             database,
             mode,
@@ -57,7 +61,8 @@ static class TtlStorageModeTestHarness
 
     internal static async Task<ReadOnlyMemory<byte>?> GetAsync(
         IPantsDatabase database,
-        ReadOnlyMemory<byte> key)
+        ReadOnlyMemory<byte> key
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,

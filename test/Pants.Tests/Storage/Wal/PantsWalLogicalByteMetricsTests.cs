@@ -70,7 +70,8 @@ public sealed class PantsWalLogicalByteMetricsTests
     static async Task AssertWalMetricsAsync(
         IReadOnlyList<byte[]> records,
         long expectedRecords,
-        long expectedBytes)
+        long expectedBytes
+    )
     {
         using var directory = new TemporaryDirectory();
         var options = PantsOpenOptions.Local(directory.Path)
@@ -96,7 +97,8 @@ public sealed class PantsWalLogicalByteMetricsTests
         string key,
         string? value,
         ulong sequence,
-        string? rangeEnd = null) =>
+        string? rangeEnd = null
+    ) =>
         WalCodec.EncodeRecord(new WalRecord(
             0,
             operation,

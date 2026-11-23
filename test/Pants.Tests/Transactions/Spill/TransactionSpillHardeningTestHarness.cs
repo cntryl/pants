@@ -12,7 +12,8 @@ static class TransactionSpillHardeningTestHarness
         string path,
         long transactionMemoryPoolBytes = DefaultPoolBytes,
         long memtableSizeLimitBytes = 24 * 1_024,
-        long memoryBudgetBytes = 128 * 1_024) =>
+        long memoryBudgetBytes = 128 * 1_024
+    ) =>
         PantsDatabase.OpenAsync(CreateLocalOptions(
             path,
             transactionMemoryPoolBytes,
@@ -22,7 +23,8 @@ static class TransactionSpillHardeningTestHarness
     internal static ValueTask<IPantsDatabase> OpenLocalForTestingAsync(
         string path,
         IFailpointHandler failpoints,
-        long transactionMemoryPoolBytes = DefaultPoolBytes) =>
+        long transactionMemoryPoolBytes = DefaultPoolBytes
+    ) =>
         PantsDatabase.OpenForTestingAsync(
             CreateLocalOptions(path, transactionMemoryPoolBytes),
             new RuntimeDependencies(failpoints));
@@ -31,7 +33,8 @@ static class TransactionSpillHardeningTestHarness
         string path,
         long transactionMemoryPoolBytes = DefaultPoolBytes,
         long memtableSizeLimitBytes = 24 * 1_024,
-        long memoryBudgetBytes = 128 * 1_024) =>
+        long memoryBudgetBytes = 128 * 1_024
+    ) =>
         PantsOpenOptions.Local(path)
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(memoryBudgetBytes))
             .WithMemtableLimits(memtableSizeLimitBytes)
@@ -55,9 +58,11 @@ static class TransactionSpillHardeningTestHarness
         IPantsTransaction transaction,
         string prefix,
         int count,
-        int valueBytes = DefaultValueBytes)
+        int valueBytes = DefaultValueBytes
+    )
     {
         var value = Enumerable.Repeat((byte)'x', valueBytes).ToArray();
+
         for (var index = 0; index < count; index++)
         {
             transaction.Put(TestBytes.FromString($"{prefix}-{index:000}"), value);
@@ -71,7 +76,8 @@ static class TransactionSpillHardeningTestHarness
 
     internal static async ValueTask<string?> ReadTextAsync(
         IPantsDatabase database,
-        string key)
+        string key
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -86,6 +92,7 @@ static class TransactionSpillHardeningTestHarness
         var walDirectory = Path.Combine(databasePath, "wal");
         var ledger = WalLedgerStore.LoadExisting(walDirectory);
         var frames = new List<WalTestRecord>();
+
         foreach (var member in ledger.Members)
         {
             var path = Path.Combine(walDirectory, $"{member.Open.Id:00000000000000000000}.wal");
@@ -97,6 +104,7 @@ static class TransactionSpillHardeningTestHarness
             Assert.Equal(ledger.Holder, decoded.Holder);
             Assert.Equal(member.Open.Id, decoded.Open.Id);
             Assert.Equal(member.Open.Epoch, decoded.Open.Epoch);
+
             if (member.Sealed is not null)
             {
                 stream.Position = 0;
@@ -104,7 +112,9 @@ static class TransactionSpillHardeningTestHarness
                 stream.Position = WalSegmentCodec.HeaderSize;
             }
 
+
             var header = new byte[8];
+
             while (stream.Position < stream.Length)
             {
                 Assert.True(stream.Length - stream.Position >= header.Length, "The WAL frame header is truncated.");
@@ -117,15 +127,18 @@ static class TransactionSpillHardeningTestHarness
                 var payload = GC.AllocateUninitializedArray<byte>(payloadLength);
                 stream.ReadExactly(payload);
                 Assert.Equal(expectedChecksum, DiskFormat.Crc32C(payload));
+
                 if (WalSegmentCodec.IsFooter(payload))
                 {
                     Assert.Equal(stream.Length, stream.Position);
                     break;
                 }
 
+
                 frames.Add(DecodeWalRecord(payload, payloadLength, decoded.Open.Epoch));
             }
         }
+
 
         return frames;
     }
@@ -145,6 +158,7 @@ static class TransactionSpillHardeningTestHarness
         ulong? transactionId = null;
         byte? compression = null;
         var cursor = 3;
+
         while (cursor < payload.Length)
         {
             Assert.True(payload.Length - cursor >= 5, "The WAL TLV header is truncated.");
@@ -156,6 +170,7 @@ static class TransactionSpillHardeningTestHarness
             Assert.True(cursor <= payload.Length - length, "The WAL TLV is truncated.");
             var field = payload.Slice(cursor, length);
             cursor += length;
+
             switch (tag)
             {
                 case 1:
@@ -194,16 +209,19 @@ static class TransactionSpillHardeningTestHarness
             }
         }
 
+
         Assert.Equal(payload.Length, cursor);
         Assert.True(operation.HasValue, "The WAL record does not contain an operation tag.");
         Assert.InRange(operation.Value, (byte)0, (byte)6);
         Assert.True(columnFamilyId.HasValue, "The WAL record does not contain a column-family tag.");
         Assert.True(sequence.HasValue, "The WAL record does not contain a sequence tag.");
         Assert.NotNull(key);
+
         if (value is not null)
         {
             value = DiskFormat.Decompress(value, compression ?? 0);
         }
+
 
         switch (operation.Value)
         {

@@ -13,7 +13,8 @@ static class SstRangeTombstoneMask
     public static bool Covers(
         IReadOnlyList<RangeTombstone> tombstones,
         ReadOnlySpan<byte> key,
-        ulong entrySequence)
+        ulong entrySequence
+    )
     {
         foreach (var tombstone in tombstones)
         {

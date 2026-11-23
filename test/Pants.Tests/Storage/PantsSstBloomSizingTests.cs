@@ -81,10 +81,12 @@ public sealed class PantsSstBloomSizingTests
         await using var reader = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         foreach (var entry in entries)
         {
             Assert.Equal(entry.Value, (await reader.GetAsync(entry.Key))?.ToArray());
         }
+
 
         for (var index = 0; index < 64; index++)
         {
@@ -178,6 +180,7 @@ public sealed class PantsSstBloomSizingTests
         var count = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(block));
         var data = block[(sizeof(uint) + count * sizeof(uint))..];
         var blooms = new List<(int Bits, int KeyCount, int Probes, int BitBytes)>();
+
         for (var index = 0; index < count; index++)
         {
             var start = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(block[(sizeof(uint) * (index + 1))..]));
@@ -191,6 +194,7 @@ public sealed class PantsSstBloomSizingTests
                 bloom[8],
                 bloom.Length - BloomHeaderSize));
         }
+
 
         return blooms;
     }
@@ -209,6 +213,7 @@ public sealed class PantsSstBloomSizingTests
         var legacyBlooms = new List<byte[]>();
         var firstEntry = 0;
         uint bloomOffset = 0;
+
         foreach (var blockKeyCount in keysPerBlock)
         {
             var bloom = LegacyBloom(orderedEntries.Skip(firstEntry).Take(blockKeyCount).Select(static entry => entry.Key));
@@ -217,6 +222,7 @@ public sealed class PantsSstBloomSizingTests
             bloomOffset = checked(bloomOffset + (uint)bloom.Length);
             firstEntry += blockKeyCount;
         }
+
 
         foreach (var bloom in legacyBlooms)
         {
@@ -233,9 +239,11 @@ public sealed class PantsSstBloomSizingTests
         encoded.CopyTo(bytes.AsSpan(oldOffset + sizeof(uint)));
         original.AsSpan(oldOffset + oldSize).CopyTo(bytes.AsSpan(oldOffset + newSize));
         var footer = bytes.AsSpan(bytes.Length - DiskFormat.SstFooterSize);
+
         for (var handleOffset = 0; handleOffset < 48; handleOffset += 16)
         {
             var handle = SstCodec.ReadHandle(footer, handleOffset);
+
             if (handle.Offset > bloomHandle.Offset && handle.Size != 0)
             {
                 BinaryPrimitives.WriteUInt64LittleEndian(
@@ -243,6 +251,7 @@ public sealed class PantsSstBloomSizingTests
                     handle.Offset - (ulong)oldSize + (ulong)newSize);
             }
         }
+
 
         BinaryPrimitives.WriteUInt64LittleEndian(footer[56..], (ulong)newSize);
         BinaryPrimitives.WriteUInt32LittleEndian(footer[80..], DiskFormat.Crc32C(footer[..80]));
@@ -257,16 +266,19 @@ public sealed class PantsSstBloomSizingTests
         BinaryPrimitives.WriteUInt32LittleEndian(bloom, checked((uint)numberOfBits));
         BinaryPrimitives.WriteUInt32LittleEndian(bloom.AsSpan(sizeof(uint)), checked((uint)keys.Length));
         bloom[8] = checked((byte)probes);
+
         foreach (var key in keys)
         {
             var firstHash = XxHash3.HashToUInt64(key, unchecked((long)BloomSeedOne));
             var secondHash = XxHash3.HashToUInt64(key, unchecked((long)BloomSeedTwo));
+
             for (ulong probe = 0; probe < (ulong)probes; probe++)
             {
                 var bit = unchecked(firstHash + probe * secondHash) % (ulong)numberOfBits;
                 bloom[BloomHeaderSize + checked((int)(bit / 8))] |= checked((byte)(1 << checked((int)(bit % 8))));
             }
         }
+
 
         return bloom;
     }

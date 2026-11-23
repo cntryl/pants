@@ -140,7 +140,8 @@ public sealed class CommitCoalescerTests
     [InlineData(PantsDurability.CloudAsync, PantsDurability.Buffered)]
     public async Task ShouldAppendExtendedDurabilityGroupAtLocalBoundary(
         PantsDurability requested,
-        PantsDurability expectedWalDurability)
+        PantsDurability expectedWalDurability
+    )
     {
         var state = CreateState();
         PantsDurability? appendedDurability = null;
@@ -174,7 +175,8 @@ public sealed class CommitCoalescerTests
 
     static CommitCoalescer CreateCoalescer(
         bool enabled,
-        long memtableSizeLimitBytes = 1_024) =>
+        long memtableSizeLimitBytes = 1_024
+    ) =>
         new(
             enabled,
             memtableSizeLimitBytes,
@@ -187,7 +189,8 @@ public sealed class CommitCoalescerTests
 
     static CommitRuntimeCommand CreateCommand(
         long transactionId,
-        PantsDurability durability = PantsDurability.Sync)
+        PantsDurability durability = PantsDurability.Sync
+    )
     {
         var state = CreateState();
         var operation = new TransactionIntentOperation(

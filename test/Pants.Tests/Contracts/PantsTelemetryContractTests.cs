@@ -246,10 +246,12 @@ public sealed class PantsTelemetryContractTests
             PantsTransactionMode.ReadOnly);
         Assert.NotNull(await reader.GetAsync("key-0001"u8.ToArray()));
         Assert.NotNull(await reader.GetAsync("key-0001"u8.ToArray()));
+
         for (var index = 0; index < 32; index++)
         {
             Assert.Null(await reader.GetAsync(TestBytes.FromString($"key-{index:D4}-absent")));
         }
+
 
         var diagnostics = await database.Diagnostics.GetReadPathDiagnosticsAsync();
         var amplification = await database.Diagnostics.GetReadAmplificationMetricsAsync();
@@ -309,10 +311,12 @@ public sealed class PantsTelemetryContractTests
             PantsTransactionMode.ReadOnly);
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
         var entries = new List<PantsEntry>();
+
         await foreach (var entry in scan)
         {
             entries.Add(entry);
         }
+
 
         var after = await database.Diagnostics.GetReadPathDiagnosticsAsync();
         Assert.Equal(2, entries.Count);
@@ -422,10 +426,12 @@ public sealed class PantsTelemetryContractTests
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.NotNull(await reader.GetAsync("key-0032"u8.ToArray()));
+
         for (var index = 0; index < 2048; index++)
         {
             Assert.Null(await reader.GetAsync(TestBytes.FromString($"key-0032-{index:0000}")));
         }
+
 
         var metrics = await database.Diagnostics.GetReadAmplificationMetricsAsync();
         var runtime = await database.Diagnostics.GetRuntimeMetricsAsync();
@@ -444,7 +450,8 @@ public sealed class PantsTelemetryContractTests
     static async ValueTask CommitAsync(
         IPantsDatabase database,
         string key,
-        PantsWriteOptions writeOptions)
+        PantsWriteOptions writeOptions
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -455,16 +462,20 @@ public sealed class PantsTelemetryContractTests
 
     static async ValueTask<PantsRuntimeMetrics> WaitForMetricsAsync(
         IPantsDatabase database,
-        Func<PantsRuntimeMetrics, bool> predicate)
+        Func<PantsRuntimeMetrics, bool> predicate
+    )
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         while (true)
         {
             var metrics = await database.Diagnostics.GetRuntimeMetricsAsync(timeout.Token);
+
             if (predicate(metrics))
             {
                 return metrics;
             }
+
 
             await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
         }
@@ -473,6 +484,7 @@ public sealed class PantsTelemetryContractTests
     static async ValueTask WaitForAsync(Func<bool> predicate)
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         while (!predicate())
         {
             await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);

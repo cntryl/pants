@@ -56,10 +56,12 @@ public sealed class MidgeFamilyCrashParityTests
     {
         var databasePath = Environment.GetEnvironmentVariable(DatabasePathEnvironmentVariable);
         var readyPath = Environment.GetEnvironmentVariable(ReadyPathEnvironmentVariable);
+
         if (databasePath is null || readyPath is null)
         {
             return;
         }
+
 
         await using var database = await PantsDatabase.OpenAsync(CreateOptions(databasePath));
         await PutAsync(
@@ -75,6 +77,7 @@ public sealed class MidgeFamilyCrashParityTests
         await File.WriteAllTextAsync(readyPath, "ready");
 
         using var process = Process.GetCurrentProcess();
+
         try
         {
             process.Kill();
@@ -108,7 +111,8 @@ public sealed class MidgeFamilyCrashParityTests
 
     static async Task AssertRecoveredStateAsync(
         IPantsDatabase database,
-        Dictionary<string, Dictionary<string, string?>> expected)
+        Dictionary<string, Dictionary<string, string?>> expected
+    )
     {
         var families = await database.ColumnFamilies.ListAsync();
         Assert.Equal(
@@ -122,6 +126,7 @@ public sealed class MidgeFamilyCrashParityTests
             await using var reader = await database.Transactions.BeginAsync(
                 family,
                 PantsTransactionMode.ReadOnly);
+
             foreach (var key in Keys)
             {
                 var value = await reader.GetAsync(TestBytes.FromString(key));
@@ -130,12 +135,15 @@ public sealed class MidgeFamilyCrashParityTests
                     value is { } bytes ? TestBytes.ToText(bytes) : null);
             }
 
+
             await using var scan = await reader.ScanAsync(new PantsScanQuery());
             var scanned = new List<(string Key, string Value)>();
+
             await foreach (var entry in scan)
             {
                 scanned.Add((TestBytes.ToText(entry.Key), TestBytes.ToText(entry.Value)));
             }
+
 
             var expectedRows = familyState.Value
                 .Where(static pair => pair.Value is not null)
@@ -150,7 +158,8 @@ public sealed class MidgeFamilyCrashParityTests
         IPantsDatabase database,
         IPantsColumnFamily family,
         string key,
-        string value)
+        string value
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,
@@ -181,6 +190,7 @@ public sealed class MidgeFamilyCrashParityTests
     {
         var leasePath = Path.Combine(path, ".midge_leader");
         var lines = await File.ReadAllLinesAsync(leasePath);
+
         for (var index = 0; index < lines.Length; index++)
         {
             if (lines[index].StartsWith("acquired_at: ", StringComparison.Ordinal))
@@ -188,6 +198,7 @@ public sealed class MidgeFamilyCrashParityTests
                 lines[index] = "acquired_at: 1970-01-01T00:00:00Z";
             }
         }
+
 
         await File.WriteAllLinesAsync(
             leasePath,
@@ -210,6 +221,7 @@ public sealed class MidgeFamilyCrashParityTests
     static void CopyCrashImage(string source, string destination)
     {
         Directory.CreateDirectory(destination);
+
         foreach (var sourceDirectory in Directory.EnumerateDirectories(
                      source,
                      "*",
@@ -220,16 +232,19 @@ public sealed class MidgeFamilyCrashParityTests
                 Path.GetRelativePath(source, sourceDirectory)));
         }
 
+
         foreach (var sourceFile in Directory.EnumerateFiles(
                      source,
                      "*",
                      SearchOption.AllDirectories))
         {
             var relativePath = Path.GetRelativePath(source, sourceFile);
+
             if (relativePath is "LOCK" or ".midge_leader.lock")
             {
                 continue;
             }
+
 
             var destinationFile = Path.Combine(destination, relativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(destinationFile)!);

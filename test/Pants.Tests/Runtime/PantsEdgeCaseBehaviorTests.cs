@@ -216,6 +216,7 @@ public sealed class PantsEdgeCaseBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await StorageModeTestHarness.OpenAsync(mode, directory.Path);
+
         for (var cycle = 0; cycle < 10; cycle++)
         {
             await StorageModeTestHarness.PutAsync(database, mode, "key", $"cycle-{cycle}");
@@ -225,6 +226,7 @@ public sealed class PantsEdgeCaseBehaviorTests
             deleting.Delete("key"u8.ToArray());
             await deleting.CommitAsync(StorageModeTestHarness.GetWriteOptions(mode));
         }
+
 
         Assert.Null(await StorageModeTestHarness.GetTextAsync(database, "key"));
     }

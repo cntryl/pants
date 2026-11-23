@@ -16,6 +16,7 @@ static class CsvTable
         parser.SetDelimiters(",");
 
         string[] headers;
+
         try
         {
             headers = parser.ReadFields() ?? throw new InvalidDataException("The benchmark CSV is empty.");
@@ -24,6 +25,7 @@ static class CsvTable
         {
             throw new InvalidDataException("The benchmark CSV is malformed.", exception);
         }
+
 
         if (headers.Length == 0 || headers.Any(string.IsNullOrWhiteSpace))
         {
@@ -36,9 +38,11 @@ static class CsvTable
         }
 
         var records = new List<IReadOnlyDictionary<string, string>>();
+
         while (!parser.EndOfData)
         {
             string[] record;
+
             try
             {
                 record = parser.ReadFields() ?? [];
@@ -47,6 +51,7 @@ static class CsvTable
             {
                 throw new InvalidDataException($"CSV row {parser.LineNumber} is malformed.", exception);
             }
+
 
             if (record.Length != headers.Length)
             {
@@ -57,6 +62,7 @@ static class CsvTable
             records.Add(headers.Zip(record)
                 .ToDictionary(pair => pair.First, pair => pair.Second, StringComparer.Ordinal));
         }
+
 
         return records;
     }

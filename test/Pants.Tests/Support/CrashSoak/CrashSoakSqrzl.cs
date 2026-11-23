@@ -17,10 +17,12 @@ static class CrashSoakSqrzl
         get
         {
             var configured = Environment.GetEnvironmentVariable("SQRZL_ENDPOINT");
+
             if (!string.IsNullOrWhiteSpace(configured))
             {
                 return configured.TrimEnd('/');
             }
+
 
             var port = Environment.GetEnvironmentVariable("SQRZL_API_PORT");
             return $"http://127.0.0.1:{(string.IsNullOrWhiteSpace(port) ? "9000" : port)}";
@@ -43,6 +45,7 @@ static class CrashSoakSqrzl
             using var response = await HealthClient.GetAsync(
                 $"{Endpoint}/healthz",
                 HttpCompletionOption.ResponseHeadersRead);
+
             if (response.IsSuccessStatusCode)
             {
                 return;

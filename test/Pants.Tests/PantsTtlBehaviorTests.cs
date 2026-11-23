@@ -103,10 +103,12 @@ public sealed class PantsTtlBehaviorTests
         clock.UtcNow = DateTimeOffset.UnixEpoch.AddMilliseconds(51_001);
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
         var entries = new List<PantsEntry>();
+
         await foreach (var entry in scan)
         {
             entries.Add(entry);
         }
+
 
         Assert.Equal(2, entries.Count);
     }
@@ -137,6 +139,7 @@ public sealed class PantsTtlBehaviorTests
                          PantsTransactionMode.ReadWrite))
         {
             var value = Enumerable.Repeat((byte)'x', 1024).ToArray();
+
             for (var index = 0; index < 6; index++)
             {
                 transaction.Put(
@@ -144,6 +147,7 @@ public sealed class PantsTtlBehaviorTests
                     value,
                     TimeSpan.FromSeconds(1));
             }
+
 
             Assert.NotEmpty(Directory.GetFiles(Path.Combine(directory.Path, "txn"), "*.run"));
             await transaction.CommitAsync(PantsWriteOptions.Buffered);
@@ -188,12 +192,14 @@ public sealed class PantsTtlBehaviorTests
                 Enumerable.Repeat((byte)'t', 1024).ToArray(),
                 TimeSpan.FromSeconds(1));
             writer.Put("no-ttl"u8.ToArray(), "spilled-stable"u8.ToArray());
+
             for (var index = 0; index < 6; index++)
             {
                 writer.Put(
                     TestBytes.FromString($"padding-{index:000}"),
                     Enumerable.Repeat((byte)'p', 1024).ToArray());
             }
+
 
             Assert.NotEmpty(Directory.GetFiles(Path.Combine(directory.Path, "txn"), "*.run"));
             await writer.CommitAsync(PantsWriteOptions.Sync);
@@ -226,10 +232,12 @@ public sealed class PantsTtlBehaviorTests
                     index == 0 ? "max-ttl"u8.ToArray() : TestBytes.FromString($"padding-{index}"),
                     "value"u8.ToArray(),
                     index == 0 ? TimeSpan.FromSeconds(1) : null);
+
                 if (index == 0)
                 {
                     writer.Put("no-ttl"u8.ToArray(), "stable"u8.ToArray());
                 }
+
 
                 await writer.CommitAsync(PantsWriteOptions.Sync);
                 await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
@@ -527,10 +535,12 @@ public sealed class PantsTtlBehaviorTests
         await database.Maintenance.CompactAllAsync();
         var originalL1 = (await database.Diagnostics.GetStorageLayoutAsync()).Levels
             .Where(level => level.Level == 1).SelectMany(level => level.Files).Select(file => file.Name).ToArray();
+
         if (mode != TtlStorageMode.Memory)
         {
             Assert.NotEmpty(originalL1);
         }
+
         await WriteTtlGenerationAsync(database, mode, parity: 1, TimeSpan.FromHours(1));
         clock.UtcNow = DateTimeOffset.UnixEpoch.AddSeconds(1);
         await database.Maintenance.CompactAllAsync();
@@ -539,12 +549,14 @@ public sealed class PantsTtlBehaviorTests
         Assert.DoesNotContain(originalL1, filesAfter.Contains);
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 50; index++)
         {
             Assert.Null(await reader.GetAsync(TestBytes.FromString($"ttl-key-{index * 2:0000}")));
             Assert.Equal("long-value", TestBytes.ToText(
                 (await reader.GetAsync(TestBytes.FromString($"ttl-key-{index * 2 + 1:0000}")))!.Value));
         }
+
         var expected = Enumerable.Range(0, 50)
             .Select(index => (Key: $"ttl-key-{index * 2 + 1:0000}", Value: "long-value")).ToArray();
         Assert.Equal(expected, await ReadRowsAsync(reader));
@@ -596,6 +608,7 @@ public sealed class PantsTtlBehaviorTests
                 writer.Put("stable"u8.ToArray(), "control"u8.ToArray());
                 await writer.CommitAsync(mode == TtlStorageMode.Cloud ? PantsWriteOptions.CloudStrict : PantsWriteOptions.Sync);
             }
+
             if (flush)
             {
                 await database.Maintenance.FlushAsync(family);
@@ -624,6 +637,7 @@ public sealed class PantsTtlBehaviorTests
         var clock = new ManualClock(DateTimeOffset.UnixEpoch);
         await using var database = await PantsDatabase.OpenAsync(
             TtlStorageModeTestHarness.CreateOptions(mode, directory.Path, clock).WithBackgroundCompaction(false));
+
         for (var generation = 0; generation < 3; generation++)
         {
             await using var writer = await database.Transactions.BeginAsync(
@@ -633,27 +647,34 @@ public sealed class PantsTtlBehaviorTests
             await writer.CommitAsync(TtlStorageModeTestHarness.GetWriteOptions(mode));
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
+
         await TtlStorageModeTestHarness.PutAsync(database, mode, "key1", "value1", TimeSpan.FromSeconds(1));
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         var original = (await database.Diagnostics.GetStorageLayoutAsync()).Levels
             .SelectMany(level => level.Files).Select(file => file.Name).ToArray();
+
         if (mode != TtlStorageMode.Memory)
         {
             Assert.Equal(4, original.Length);
         }
+
+
         if (expired)
         {
             clock.UtcNow = DateTimeOffset.UnixEpoch.AddSeconds(1);
         }
+
         await database.Maintenance.CompactAllAsync();
         var filesAfter = (await database.Diagnostics.GetStorageLayoutAsync()).Levels
             .SelectMany(level => level.Files).Select(file => file.Name).ToHashSet(StringComparer.Ordinal);
         Assert.DoesNotContain(original, filesAfter.Contains);
         Assert.Equal(expired ? null : "value1", await TtlStorageModeTestHarness.GetTextAsync(database, "key1"));
+
         for (var index = 0; index < 3; index++)
         {
             Assert.Equal($"value-{index}", await TtlStorageModeTestHarness.GetTextAsync(database, $"filler-{index}"));
         }
+
         Assert.Equal("latest-2", await TtlStorageModeTestHarness.GetTextAsync(database, "shared-key"));
     }
 
@@ -661,11 +682,13 @@ public sealed class PantsTtlBehaviorTests
     {
         await using var writer = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadWrite);
+
         for (var index = 0; index < 50; index++)
         {
             writer.Put(TestBytes.FromString($"ttl-key-{index * 2 + parity:0000}"),
                 TestBytes.FromString(parity == 0 ? "short-value" : "long-value"), ttl);
         }
+
         await writer.CommitAsync(TtlStorageModeTestHarness.GetWriteOptions(mode));
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
     }
@@ -674,10 +697,12 @@ public sealed class PantsTtlBehaviorTests
     {
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
         var rows = new List<(string Key, string Value)>();
+
         await foreach (var entry in scan)
         {
             rows.Add((TestBytes.ToText(entry.Key), TestBytes.ToText(entry.Value)));
         }
+
         return rows.ToArray();
     }
 }

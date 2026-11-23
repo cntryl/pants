@@ -5,12 +5,14 @@ static class CoalescedCommitApplyPreflight
     public static IReadOnlyList<PreparedCoalescedCommit> Create(
         RuntimeState state,
         IReadOnlyList<CommitRuntimeCommand> commands,
-        ulong? sequenceFloor = null)
+        ulong? sequenceFloor = null
+    )
     {
         var prepared = new List<PreparedCoalescedCommit>(commands.Count);
         var totalBytesByFamily = new Dictionary<ColumnFamilyIdentity, long>(
             ColumnFamilyIdentityComparer.Instance);
         var sequence = Math.Max(state.Sequence, sequenceFloor ?? state.Sequence);
+
         foreach (var command in commands)
         {
             sequence = SequenceSpace.CommitSequenceAfter(
@@ -21,6 +23,7 @@ static class CoalescedCommitApplyPreflight
                 ColumnFamilyIdentityComparer.Instance);
             var families = new HashSet<ColumnFamilyIdentity>(
                 ColumnFamilyIdentityComparer.Instance);
+
             try
             {
                 command.Payload.Operations.ForEach(operation =>
@@ -42,6 +45,7 @@ static class CoalescedCommitApplyPreflight
                     exception);
             }
 
+
             prepared.Add(new PreparedCoalescedCommit(
                 command,
                 sequence,
@@ -49,6 +53,7 @@ static class CoalescedCommitApplyPreflight
                 bytesByFamily,
                 [.. families]));
         }
+
 
         foreach (var pair in totalBytesByFamily)
         {
@@ -75,7 +80,8 @@ static class CoalescedCommitApplyPreflight
 
     static void ValidateOperation(
         RuntimeState state,
-        TransactionIntentOperation operation)
+        TransactionIntentOperation operation
+    )
     {
         if (!state.ActiveFamilyVersions.TryGetValue(
                 operation.Family.Name,

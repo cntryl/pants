@@ -9,6 +9,7 @@ static class TestWait
     public static async Task UntilAsync(Func<bool> condition, string description)
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         while (!condition())
         {
             try
@@ -26,6 +27,7 @@ static class TestWait
     public static async Task UntilAsync(Func<Task<bool>> condition, string description)
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         while (!await condition())
         {
             try

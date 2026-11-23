@@ -32,10 +32,12 @@ sealed class ProviderObjectStoreSet(
         TimeSpan timeout,
         HttpClient? httpClient,
         TimeProvider timeProvider,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(topology);
         var opened = new ConcurrentBag<ICloudObjectStore>();
+
         try
         {
             var walTask = OpenAsync(topology.Wal);
@@ -61,6 +63,7 @@ sealed class ProviderObjectStoreSet(
             throw;
         }
 
+
         async Task<ICloudObjectStore> OpenAsync(PantsCloudStorageLocation location)
         {
             var store = await CloudObjectStoreFactory.CreateAsync(
@@ -79,6 +82,7 @@ sealed class ProviderObjectStoreSet(
     {
         var distinctStores = new HashSet<ICloudObjectStore>(ReferenceEqualityComparer.Instance);
         List<Exception>? failures = null;
+
         foreach (var store in stores)
         {
             if (distinctStores.Add(store))
@@ -93,6 +97,7 @@ sealed class ProviderObjectStoreSet(
                 }
             }
         }
+
 
         if (failures is { Count: 1 })
         {

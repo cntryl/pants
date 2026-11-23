@@ -69,6 +69,7 @@ public sealed class PantsTimeAndExceptionContractTests
         };
         // The unflushed-data signal requires real family/byte context and is constructed by
         // safe drop; the context-free factory must never invent a discard licence.
+
         foreach (var (code, expectedType) in expectedTypes)
         {
             var inner = new InvalidOperationException(code.ToString());
@@ -80,6 +81,7 @@ public sealed class PantsTimeAndExceptionContractTests
             Assert.Same(inner, exception.InnerException);
             Assert.False(exception.LicensesUnflushedDiscard);
         }
+
         Assert.False(PantsException.Create(PantsErrorCode.UnflushedDataPresent, "missing drop context")
             .LicensesUnflushedDiscard);
     }

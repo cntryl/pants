@@ -57,6 +57,7 @@ public class CompressionPolicySystemBenchmarks : Tier4Benchmark
     byte[] Value(int index)
     {
         var value = Tier4Data.Value(ValueSize, index);
+
         if (Shape is CompressionShape.Structured or CompressionShape.PrefixRandomTail)
         {
             value.AsSpan(0, ValueSize / 2).Fill(0x41);
@@ -69,6 +70,7 @@ public class CompressionPolicySystemBenchmarks : Tier4Benchmark
         {
             value.AsSpan().Fill(0x5a);
         }
+
 
         return value;
     }

@@ -70,7 +70,8 @@ public sealed class AsyncSstScanSourceTests
         public ValueTask<byte[]> ReadExactlyAsync(
             long offset,
             int length,
-            CancellationToken cancellationToken) =>
+            CancellationToken cancellationToken
+        ) =>
             inner.ReadExactlyAsync(offset, length, cancellationToken);
 
         public async ValueTask DisposeAsync()

@@ -25,6 +25,7 @@ sealed class RuntimeMetricsResponseFailpointHandler : IFailpointHandler, IDispos
         }
 
         _entered.TrySetResult();
+
         if (!_release.Wait(MaximumBlockTime))
         {
             throw new TimeoutException($"Timed out waiting to release {failpoint}.");

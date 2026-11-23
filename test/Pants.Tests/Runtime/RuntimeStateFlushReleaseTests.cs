@@ -103,10 +103,12 @@ public sealed class RuntimeStateFlushReleaseTests
         var (state, payload) = ReleasePublishedPayload();
 
         Assert.Empty(state.FamilyData[Family]);
+
         for (var attempt = 0; attempt < 3; attempt++)
         {
             CollectGarbage();
         }
+
 
         Assert.False(IsAlive(payload));
     }

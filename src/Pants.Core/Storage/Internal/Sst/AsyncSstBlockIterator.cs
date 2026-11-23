@@ -22,7 +22,8 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
         byte[]? startInclusive,
         byte[]? endExclusive,
         ResourceBudget? resourceBudget,
-        SstScanBlockCache? blockCache = null)
+        SstScanBlockCache? blockCache = null
+    )
     {
         _reader = reader;
         _direction = direction;
@@ -56,10 +57,12 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
         if (!_started)
         {
             _started = true;
+
             if (_reader.DataBlockCount == 0 || !TryResolveStartBlock(out _blockIndex))
             {
                 return Finish();
             }
+
 
             await LoadBlockAsync(_blockIndex, cancellationToken).ConfigureAwait(false);
         }
@@ -76,11 +79,13 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
             while (_blockEntries is not null && _positionInBlock < _blockEntries.Count)
             {
                 var candidate = _blockEntries[_positionInBlock++];
+
                 if (_startInclusive is not null &&
                     candidate.Key.AsSpan().SequenceCompareTo(_startInclusive) < 0)
                 {
                     continue;
                 }
+
 
                 if (_endExclusive is not null &&
                     candidate.Key.AsSpan().SequenceCompareTo(_endExclusive) >= 0)
@@ -93,10 +98,12 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
             }
 
             _blockIndex++;
+
             if (_blockIndex >= _reader.DataBlockCount)
             {
                 return Finish();
             }
+
 
             await LoadBlockAsync(_blockIndex, cancellationToken).ConfigureAwait(false);
         }
@@ -109,11 +116,13 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
             while (_blockEntries is not null && _positionInBlock >= 0)
             {
                 var candidate = _blockEntries[_positionInBlock--];
+
                 if (_endExclusive is not null &&
                     candidate.Key.AsSpan().SequenceCompareTo(_endExclusive) >= 0)
                 {
                     continue;
                 }
+
 
                 if (_startInclusive is not null &&
                     candidate.Key.AsSpan().SequenceCompareTo(_startInclusive) < 0)
@@ -126,10 +135,12 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
             }
 
             _blockIndex--;
+
             if (_blockIndex < 0)
             {
                 return Finish();
             }
+
 
             await LoadBlockAsync(_blockIndex, cancellationToken).ConfigureAwait(false);
         }
@@ -147,9 +158,11 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
         SstReadBlock? ownedBlock = null;
         ReadOnlyMemory<byte> block = default;
         IDisposable? decodedReservation = null;
+
         try
         {
             var cacheHit = _blockCache is not null && _blockCache.TryGet(blockIndex, out block);
+
             if (cacheHit)
             {
                 BlockCacheHits = checked(BlockCacheHits + 1);
@@ -166,12 +179,15 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
                 block = ownedBlock.Content;
                 DataBlocksRead = checked(DataBlocksRead + 1);
             }
+
             decodedReservation = _resourceBudget?.Reserve(SstCodec.MeasureDecodedDataBlockBytes(block.Span));
             var entries = SstCodec.DecodeDataBlock(block.Span);
+
             if (entries.Count == 0 || !entries[0].Key.AsSpan().SequenceEqual(_reader.GetFirstKey(blockIndex)))
             {
                 throw new PantsCorruptionException("SST index first key does not match its data block.");
             }
+
 
             if (_boundaryEntry is not null)
             {
@@ -188,12 +204,14 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
             _boundaryEntry = _direction == PantsScanDirection.Forward ? entries[^1] : entries[0];
             _blockReservation = decodedReservation;
             decodedReservation = null;
+
             if (!cacheHit)
             {
                 // Admit only complete, validated blocks after their retained decode fits. The
                 // shared cache never receives an invalid or partially admitted scan block.
                 _blockCache?.Admit(blockIndex, block.Span);
             }
+
             _blockEntries = entries;
             _positionInBlock = _direction == PantsScanDirection.Forward ? 0 : entries.Count - 1;
         }
@@ -220,11 +238,13 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
         if (_direction == PantsScanDirection.Forward)
         {
             blockIndex = _startInclusive is null ? 0 : Math.Max(0, FindFloorBlock(_startInclusive));
+
             while (blockIndex > 0 &&
                    _reader.GetFirstKey(blockIndex).AsSpan().SequenceEqual(_startInclusive))
             {
                 blockIndex--;
             }
+
 
             return true;
         }
@@ -244,9 +264,11 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
         var low = 0;
         var high = _reader.DataBlockCount - 1;
         var result = -1;
+
         while (low <= high)
         {
             var middle = low + (high - low) / 2;
+
             if (key.AsSpan().SequenceCompareTo(_reader.GetFirstKey(middle)) < 0)
             {
                 high = middle - 1;
@@ -257,6 +279,7 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
                 low = middle + 1;
             }
         }
+
 
         return result;
     }

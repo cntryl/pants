@@ -17,11 +17,13 @@ static class CheckpointCampaignCommand
                 await CheckpointEvidence.WriteAsync(identityPath, CheckpointProvenance.ObserveLoadedBuild()).ConfigureAwait(false);
                 return 0;
             }
+
             if (args is ["checkpoint-readback-internal", var internalRoot, var readerOutput])
             {
                 var report = await CheckpointCampaignReadback.EvaluateAsync(internalRoot).ConfigureAwait(false);
                 var loaded = CheckpointProvenance.ObserveLoadedBuild();
                 var campaign = await CheckpointEvidence.ReadAsync<CheckpointEvidence.Campaign>(Path.Combine(internalRoot, "campaign.json")).ConfigureAwait(false);
+
                 if (!CheckpointCampaignReadback.MatchesLoadedBuild(campaign.Provenance, loaded))
                 {
                     report = report with
@@ -31,6 +33,7 @@ static class CheckpointCampaignCommand
                         InvalidReasons = report.InvalidReasons.Add("Readback executable differs from the fresh archived-source build.")
                     };
                 }
+
                 report = report with
                 {
                     ReaderProcessId = Environment.ProcessId,
@@ -39,20 +42,24 @@ static class CheckpointCampaignCommand
                 await CheckpointEvidence.WriteAsync(readerOutput, report).ConfigureAwait(false);
                 return report.Complete ? 0 : 1;
             }
+
             if (args is ["checkpoint-readback", var root])
             {
                 return await ReadFreshAsync(root).ConfigureAwait(false);
             }
+
             if (args is ["checkpoint-cell", var workload, var repeatText, var campaignId, var output, var database])
             {
                 var selection = CheckpointCells.Select(workload, int.Parse(repeatText, CultureInfo.InvariantCulture));
                 var attempt = await CheckpointCellRunner.RunAsync(campaignId, selection, output, database).ConfigureAwait(false);
                 return attempt.Passed ? 0 : 1;
             }
+
             if (args is ["checkpoint-campaign", var artifacts, var databases, var source])
             {
                 return await CampaignAsync(artifacts, databases, source).ConfigureAwait(false);
             }
+
             Console.Error.WriteLine("Usage: checkpoint-campaign <fresh-artifacts> <fresh-databases> <source-root> | checkpoint-readback <artifacts>");
             return 2;
         }
@@ -68,16 +75,19 @@ static class CheckpointCampaignCommand
         artifacts = StoragePathGuard.CanonicalizeRoot(artifacts);
         databases = StoragePathGuard.CanonicalizeRoot(databases);
         source = StoragePathGuard.CanonicalizeRoot(source);
+
         if (Directory.Exists(artifacts) || Directory.Exists(databases) || Overlap(artifacts, databases) ||
             Overlap(artifacts, source) || Overlap(databases, source))
         {
             throw new InvalidOperationException("Campaign artifact/database roots must be new, mutually disjoint and outside the source; failed databases are retained.");
         }
+
         Directory.CreateDirectory(artifacts);
         Directory.CreateDirectory(databases);
         var provenance = await CheckpointProvenance.CaptureAsync(source, artifacts).ConfigureAwait(false);
         var captured = ImmutableArray.CreateBuilder<CheckpointEvidence.CapturedAttempt>(9);
         await SaveAsync().ConfigureAwait(false);
+
         if (provenance.InvalidReasons.IsEmpty)
         {
             foreach (var selection in CheckpointCells.Attempts)
@@ -86,18 +96,21 @@ static class CheckpointCampaignCommand
                 Directory.CreateDirectory(output);
                 var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet");
                 var executable = CheckpointCampaignReadback.VerifyRuntimeFiles(artifacts, provenance);
+
                 foreach (var argument in new[] { executable, "checkpoint-cell",
                              selection.Cell.Workload, selection.Repeat.ToString(CultureInfo.InvariantCulture), provenance.CampaignId,
                              output, Path.Combine(databases, selection.Key) })
                 {
                     start.ArgumentList.Add(argument);
                 }
+
                 var outcome = await CheckpointProcess.RunAsync(start, selection.Cell.Workload,
                     CheckpointCells.CellBudget + TimeSpan.FromMinutes(2), () => ReadProgress(output), TimeSpan.FromSeconds(60)).ConfigureAwait(false);
                 captured.Add(CheckpointArchive.Capture(output, Path.Combine(artifacts, selection.Key + ".zip"), selection.Key, outcome));
                 await SaveAsync().ConfigureAwait(false);
             }
         }
+
         return await ReadFreshAsync(artifacts).ConfigureAwait(false);
 
         Task SaveAsync() => CheckpointEvidence.WriteAsync(Path.Combine(artifacts, "campaign.json"),
@@ -115,11 +128,13 @@ static class CheckpointCampaignCommand
                 "checkpoint-readback-internal", Path.GetFullPath(root), Path.GetFullPath(output)).ConfigureAwait(false);
             await CheckpointEvidence.WriteAsync(Path.Combine(root, "readback-native-outcome.json"), outcome).ConfigureAwait(false);
             var report = await CheckpointEvidence.ReadAsync<CheckpointEvidence.Readback>(output).ConfigureAwait(false);
+
             if (outcome.ProcessId != report.ReaderProcessId ||
                 !CheckpointCampaignReadback.MatchesLoadedBuild(campaign.Provenance, report.ReaderLoadedBuild))
             {
                 throw new InvalidOperationException("Actual reader PID/loaded build differs from the fresh captured source.");
             }
+
             await CheckpointEvidence.WriteAsync(Path.Combine(root, "readback.json"), report).ConfigureAwait(false);
             return outcome.Success && report.Complete ? 0 : 1;
         }

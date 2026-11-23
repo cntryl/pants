@@ -10,12 +10,14 @@ public sealed class CurrentMidgeFormat9WriterTests
         using var directory = new TemporaryDirectory();
         var fixture = Path.Combine(AppContext.BaseDirectory, "Fixtures", "Compatibility", "Midge",
             "c684310d9d8ce8ecd1151c47151d4bea98b348cf", "alternating-local-midge0");
+
         foreach (var file in Directory.EnumerateFiles(fixture, "*", SearchOption.AllDirectories))
         {
             var destination = Path.Combine(directory.Path, Path.GetRelativePath(fixture, file));
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
             File.Copy(file, destination);
         }
+
 
         var options = PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false);
         await using (var database = await PantsDatabase.OpenAsync(options))

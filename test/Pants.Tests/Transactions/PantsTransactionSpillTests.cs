@@ -16,10 +16,12 @@ public sealed class PantsTransactionSpillTests
             PantsTransactionMode.ReadWrite);
         var value = GC.AllocateUninitializedArray<byte>(900);
         Array.Fill(value, (byte)'v');
+
         for (var index = 0; index < 6; index++)
         {
             transaction.Put(TestBytes.FromString($"key-{index}"), value);
         }
+
 
         transaction.Put("point"u8.ToArray(), "before"u8.ToArray());
         transaction.Put("point"u8.ToArray(), "after"u8.ToArray());
@@ -120,10 +122,12 @@ public sealed class PantsTransactionSpillTests
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
+
         for (var index = 0; index < 4; index++)
         {
             transaction.Put(TestBytes.FromString($"snapshot-{index}"), "value"u8.ToArray());
         }
+
 
         var intentBytes = instance.TransactionMemoryPool.Used;
         var first = await transaction.ScanAsync(new PantsScanQuery());

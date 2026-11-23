@@ -180,6 +180,7 @@ sealed class RuntimePlan
         var memoryHard = MemtableFlushThresholdBytes > long.MaxValue / 2
             ? long.MaxValue
             : MemtableFlushThresholdBytes * 2;
+
         if (policy.L0SoftLimit is { } l0 && (l0 <= 0 || l0 >= (long)Compaction.L0FileCountTrigger + 11) ||
             policy.MemorySoftLimitBytes is { } memory && (memory <= 0 || memory >= memoryHard) ||
             policy.PendingCompactionSoftLimitBytes is { } pending &&

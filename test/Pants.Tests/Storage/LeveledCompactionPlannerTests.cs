@@ -462,6 +462,7 @@ public sealed class LeveledCompactionPlannerTests
         for (var scenario = 0; scenario < 4; scenario++)
         {
             var files = baseline.Select(static file => file.Clone()).ToArray();
+
             switch (scenario)
             {
                 case 0:
@@ -478,6 +479,7 @@ public sealed class LeveledCompactionPlannerTests
                     break;
             }
 
+
             var plan = LeveledCompactionPlanner.Pick(
                 files,
                 0,
@@ -487,6 +489,7 @@ public sealed class LeveledCompactionPlannerTests
                 512L * 1024 * 1024);
 
             Assert.NotNull(plan);
+
             if (scenario == 0)
             {
                 Assert.Equal(CompactionPurpose.Merge, plan.Purpose);
@@ -496,6 +499,7 @@ public sealed class LeveledCompactionPlannerTests
                 Assert.Equal(6, plan.Inputs.Count(file => file.Level == 3));
                 continue;
             }
+
 
             Assert.Equal(CompactionPurpose.Repair, plan.Purpose);
             Assert.Equal(2u, plan.SourceLevel);
@@ -814,7 +818,8 @@ public sealed class LeveledCompactionPlannerTests
         int maximumInputFiles = 64,
         int levelMultiplier = 10,
         long l1TargetSizeBytes = 40L * 1024 * 1024,
-        int maximumLevels = 6) => new(
+        int maximumLevels = 6
+    ) => new(
         l0SizeTriggerBytes,
         l0FileCountTrigger,
         maximumInputFiles,
@@ -830,15 +835,16 @@ public sealed class LeveledCompactionPlannerTests
         string largest,
         ulong sizeBytes = 1024,
         uint columnFamilyId = 0,
-        bool keyBoundsComplete = false) => new()
-        {
-            Name = name,
-            Level = level,
-            ColumnFamilyId = columnFamilyId,
-            SstSequence = sequence,
-            SizeBytes = sizeBytes,
-            SmallestKey = TestBytes.FromString(smallest).ToArray(),
-            LargestKey = TestBytes.FromString(largest).ToArray(),
-            KeyBoundsComplete = keyBoundsComplete
-        };
+        bool keyBoundsComplete = false
+    ) => new()
+    {
+        Name = name,
+        Level = level,
+        ColumnFamilyId = columnFamilyId,
+        SstSequence = sequence,
+        SizeBytes = sizeBytes,
+        SmallestKey = TestBytes.FromString(smallest).ToArray(),
+        LargestKey = TestBytes.FromString(largest).ToArray(),
+        KeyBoundsComplete = keyBoundsComplete
+    };
 }

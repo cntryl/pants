@@ -64,6 +64,7 @@ sealed class RuntimeResponseRegistry
                 pending.RegisteredAt,
                 AddSaturating(_timeProvider.GetUtcNow(), AbandonedRequestRetention));
             _abandonedOrder.Enqueue(requestId);
+
             while (_abandoned.Count > AbandonedRequestCapacity &&
                    _abandonedOrder.TryDequeue(out var evicted))
             {
@@ -77,6 +78,7 @@ sealed class RuntimeResponseRegistry
         lock (_gate)
         {
             PurgeExpired();
+
             if (!_abandoned.Remove(requestId))
             {
                 return;
@@ -89,6 +91,7 @@ sealed class RuntimeResponseRegistry
     void PurgeExpired()
     {
         var now = _timeProvider.GetUtcNow();
+
         while (_abandonedOrder.TryPeek(out var requestId))
         {
             if (!_abandoned.TryGetValue(requestId, out var request))

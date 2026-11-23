@@ -80,13 +80,16 @@ sealed class ScriptedCloudObjectStore : ICloudObjectStore
         string objectKey,
         ulong offset,
         int length,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
+
         if (!SupportsRanges)
         {
             throw new PantsNotSupportedException("This test store has no ranged reads.");
         }
+
 
         if (BeforeRangeRead is { } before)
         {
@@ -125,7 +128,8 @@ sealed class ScriptedCloudObjectStore : ICloudObjectStore
         string objectKey,
         ReadOnlyMemory<byte> data,
         CloudObjectWriteCondition condition,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         _requests.Enqueue(new StoreRequest(StoreOperation.Put, objectKey, 0, data.Length));
@@ -140,10 +144,12 @@ sealed class ScriptedCloudObjectStore : ICloudObjectStore
                     exists && StringComparer.Ordinal.Equals(expected.Version, current.Version),
                 _ => false
             };
+
             if (accepted)
             {
                 _objects[objectKey] = (data.ToArray(), NextVersion());
             }
+
 
             return ValueTask.FromResult(accepted);
         }
@@ -152,7 +158,8 @@ sealed class ScriptedCloudObjectStore : ICloudObjectStore
     public ValueTask<CloudObjectListPage> ListPageAsync(
         string prefix,
         string? continuationToken,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
@@ -167,7 +174,8 @@ sealed class ScriptedCloudObjectStore : ICloudObjectStore
     public ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
         string objectKey,
         CloudObjectDeleteCondition condition,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         _requests.Enqueue(new StoreRequest(StoreOperation.Delete, objectKey, 0, 0));

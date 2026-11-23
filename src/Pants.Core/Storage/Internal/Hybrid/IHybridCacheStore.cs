@@ -22,7 +22,8 @@ interface IHybridCacheStore
 
     ValueTask VerifyRemoteSstMatchesLocalAsync(
         string name,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     void EvictLocalSst(string name);
 

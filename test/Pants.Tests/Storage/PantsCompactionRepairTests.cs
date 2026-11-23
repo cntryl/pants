@@ -19,6 +19,7 @@ public sealed class PantsCompactionRepairTests
         using var directory = new TemporaryDirectory();
         var sstDirectory = Directory.CreateDirectory(Path.Combine(directory.Path, "sst"));
         var files = new List<FileMeta>();
+
         for (var index = 0; index < 9; index++)
         {
             var sequence = checked((ulong)(index * 4 + 1));
@@ -34,6 +35,7 @@ public sealed class PantsCompactionRepairTests
             await File.WriteAllBytesAsync(Path.Combine(sstDirectory.FullName, name), bytes);
             files.Add(Metadata(name, checked((ulong)index + 1), entries, bytes, "a", "z"));
         }
+
 
         var manifest = new ManifestState
         {
@@ -75,11 +77,13 @@ public sealed class PantsCompactionRepairTests
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 9; index++)
         {
             Assert.Equal($"value-{index}", TestBytes.ToText(
                 (await reader.GetAsync(TestBytes.FromString($"key-{index}")))!.Value));
         }
+
 
         Assert.Null(await reader.GetAsync("m"u8.ToArray()));
         Assert.Equal("anchor", TestBytes.ToText((await reader.GetAsync("a"u8.ToArray()))!.Value));
@@ -166,20 +170,21 @@ public sealed class PantsCompactionRepairTests
         IReadOnlyList<SstEntry> entries,
         byte[] bytes,
         string smallest,
-        string largest) => new()
-        {
-            Name = name,
-            ColumnFamilyId = 0,
-            Level = 1,
-            SstSequence = sstSequence,
-            SizeBytes = checked((ulong)bytes.Length),
-            ContentCrc32C = DiskFormat.Crc32C(bytes),
-            SmallestKey = TestBytes.FromString(smallest),
-            LargestKey = TestBytes.FromString(largest),
-            KeyBoundsComplete = true,
-            SmallestSequence = entries.Min(static entry => entry.Sequence),
-            LargestSequence = entries.Max(static entry => entry.Sequence)
-        };
+        string largest
+    ) => new()
+    {
+        Name = name,
+        ColumnFamilyId = 0,
+        Level = 1,
+        SstSequence = sstSequence,
+        SizeBytes = checked((ulong)bytes.Length),
+        ContentCrc32C = DiskFormat.Crc32C(bytes),
+        SmallestKey = TestBytes.FromString(smallest),
+        LargestKey = TestBytes.FromString(largest),
+        KeyBoundsComplete = true,
+        SmallestSequence = entries.Min(static entry => entry.Sequence),
+        LargestSequence = entries.Max(static entry => entry.Sequence)
+    };
 
     static SstEntry Entry(string key, string? value, ulong sequence, bool isDelete = false) => new(
         TestBytes.FromString(key),

@@ -12,12 +12,14 @@ sealed class WalPublicationAdmission(ResourceBudget budget)
     public IDisposable Admit(long sizeBytes)
     {
         var bytes = ImmutablePublicationEnvelope.For(sizeBytes);
+
         if (bytes > budget.Limit)
         {
             throw PantsException.ResourceLimit(
                 $"Publishing a WAL segment of {sizeBytes} bytes needs a {bytes}-byte maintenance " +
                 $"envelope; the pool holds {budget.Limit} bytes.");
         }
+
 
         return budget.Reserve(bytes);
     }

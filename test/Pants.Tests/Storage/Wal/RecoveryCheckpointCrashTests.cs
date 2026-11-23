@@ -26,10 +26,12 @@ public sealed class RecoveryCheckpointCrashTests
     public async Task ShouldExitAfterDurableRecoveryCheckpointInChild()
     {
         var storage = Environment.GetEnvironmentVariable(StorageEnvironmentVariable);
+
         if (storage is not ("local" or "simulated-cloud"))
         {
             return;
         }
+
 
         var path = Assert.IsType<string>(Environment.GetEnvironmentVariable(DatabaseEnvironmentVariable));
         var readyPath = Assert.IsType<string>(Environment.GetEnvironmentVariable(ReadyEnvironmentVariable));
@@ -85,6 +87,7 @@ public sealed class RecoveryCheckpointCrashTests
             Assert.True(child.ExitCode != 0, await child.DescribeAsync());
         }
 
+
         if (simulatedCloud)
         {
             Assert.Empty(Directory.GetFiles(Path.Combine(databasePath, "sst"), "*.sst"));
@@ -99,6 +102,7 @@ public sealed class RecoveryCheckpointCrashTests
                 Directory.GetFiles(Path.Combine(databasePath, "sst"), "*.sst").Length >= CrashAfterCheckpoint,
                 "The child must have published checkpoints before it exited.");
         }
+
         Assert.Equal(walBytesBefore, WalBytes(databasePath));
 
         var captured = Assert.IsType<CrashChildProcess.WriterLeaseSnapshot>(
@@ -168,11 +172,13 @@ public sealed class RecoveryCheckpointCrashTests
     static async Task AssertEveryTransactionVisibleOnceAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,
-        string prefix)
+        string prefix
+    )
     {
         await using var reader = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < TransactionCount; index++)
         {
             var value = await reader.GetAsync(TestBytes.FromString($"key-{index:D3}"));
@@ -183,12 +189,15 @@ public sealed class RecoveryCheckpointCrashTests
             Assert.Equal(ValueFor(prefix, index), peer.Value.ToArray());
         }
 
+
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
         var count = 0;
+
         await foreach (var _ in scan)
         {
             count++;
         }
+
 
         Assert.Equal(TransactionCount * 2, count);
     }
@@ -202,6 +211,7 @@ public sealed class RecoveryCheckpointCrashTests
         var state = NewState();
         using var store = LocalDiskStore.Open(root, state);
         store.CreateColumnFamily(SecondFamily);
+
         for (var index = 0; index < TransactionCount; index++)
         {
             foreach (var family in new[] { DefaultFamily, SecondFamily })
@@ -230,7 +240,8 @@ public sealed class RecoveryCheckpointCrashTests
         ulong ordinal,
         ColumnFamilyIdentity family,
         byte[] key,
-        byte[] value) =>
+        byte[] value
+    ) =>
         new(
             ordinal,
             CommitOperationKind.Put,
@@ -244,7 +255,8 @@ public sealed class RecoveryCheckpointCrashTests
 
     static CommitPayload CreateCommitPayload(
         RuntimeState state,
-        TransactionIntentOperation[] operations) =>
+        TransactionIntentOperation[] operations
+    ) =>
         new(
             1,
             PantsTransactionMode.ReadWrite,
@@ -282,6 +294,7 @@ public sealed class RecoveryCheckpointCrashTests
                 .GetAwaiter().GetResult();
             File.WriteAllText(readyPath, JsonSerializer.Serialize(captured));
             using var process = Process.GetCurrentProcess();
+
             try
             {
                 process.Kill();

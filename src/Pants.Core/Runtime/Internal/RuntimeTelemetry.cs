@@ -253,11 +253,13 @@ sealed class RuntimeTelemetry
         long snapshotId,
         DateTimeOffset startedAtUtc,
         PantsTransactionMode mode,
-        DatabaseVersion? snapshot = null)
+        DatabaseVersion? snapshot = null
+    )
     {
         lock (_snapshotLifetimeGate)
         {
             _activeSnapshotStartTimes.Add(snapshotId, startedAtUtc);
+
             if (snapshot is not null)
             {
                 _activeSnapshotVersions.Add(snapshotId, snapshot);
@@ -266,6 +268,7 @@ sealed class RuntimeTelemetry
 
         Interlocked.Increment(ref _snapshotsRegistered);
         PantsDiagnostics.TransactionsStarted.Add(1);
+
         if (mode == PantsTransactionMode.ReadOnly)
         {
             Interlocked.Increment(ref _readOnlyTransactionsBegun);
@@ -278,6 +281,7 @@ sealed class RuntimeTelemetry
         lock (_snapshotLifetimeGate)
         {
             _activeSnapshotStartTimes.Add(snapshotId, startedAtUtc);
+
             if (snapshot is not null)
             {
                 _activeSnapshotVersions.Add(snapshotId, snapshot);
@@ -367,10 +371,12 @@ sealed class RuntimeTelemetry
         Interlocked.Add(ref _sstReaderCacheMisses, sample.ReaderCacheMisses);
         Interlocked.Add(ref _sstBlockCacheHits, sample.BlockCacheHits);
         Interlocked.Add(ref _sstBlockCacheMisses, sample.BlockCacheMisses);
+
         if (sample.SstsTouched > ReadAmplificationBudget.MaximumSstsPerRead)
         {
             Interlocked.Increment(ref _sstBudgetViolations);
         }
+
 
         if (sample.AmplificationBlocksRead > ReadAmplificationBudget.MaximumBlocksPerRead)
         {
@@ -389,6 +395,7 @@ sealed class RuntimeTelemetry
         var nanoseconds = ToNanoseconds(elapsed);
         Interlocked.Add(ref _remoteRangeLatencyNanosecondsTotal, nanoseconds);
         SetMaximum(ref _remoteRangeLatencyNanosecondsMaximum, nanoseconds);
+
         if (failed)
         {
             Interlocked.Increment(ref _remoteRangeFailuresTotal);
@@ -401,6 +408,7 @@ sealed class RuntimeTelemetry
     public void RecordWriteConflict(bool rangeConflict)
     {
         PantsDiagnostics.TransactionsConflicted.Add(1);
+
         if (rangeConflict)
         {
             Interlocked.Increment(ref _writeConflictsRange);
@@ -419,7 +427,8 @@ sealed class RuntimeTelemetry
         int readerCacheMisses,
         int rangeTombstoneScans,
         int blockCacheHits = 0,
-        int blockCacheMisses = 0)
+        int blockCacheMisses = 0
+    )
     {
         Interlocked.Add(ref _candidateSstFilesChecked, candidateSsts);
         Interlocked.Add(ref _candidateBlocksChecked, candidateBlocks);
@@ -478,6 +487,7 @@ sealed class RuntimeTelemetry
         lock (_writeStallTimingGate)
         {
             var observedAt = _timeProvider.GetTimestamp();
+
             if (isStalled && _writeStallStartedAt is null)
             {
                 _writeStallStartedAt = observedAt;
@@ -488,6 +498,7 @@ sealed class RuntimeTelemetry
                 _writeStallActiveNanoseconds = Math.Max(
                     _writeStallActiveNanoseconds,
                     GetElapsedNanoseconds(startedAt, observedAt));
+
                 if (!isStalled)
                 {
                     _writeStallNanosecondsTotal = SaturatingAdd(
@@ -501,6 +512,7 @@ sealed class RuntimeTelemetry
                 }
             }
 
+
             var active = _writeStallActiveNanoseconds;
             return new WriteStallTimingSnapshot(
                 SaturatingAdd(_writeStallNanosecondsTotal, active),
@@ -512,7 +524,8 @@ sealed class RuntimeTelemetry
     public void RecordCloudAsyncWalSegmentSealed(
         ulong segmentId,
         long bytes,
-        TimeSpan elapsed)
+        TimeSpan elapsed
+    )
     {
         Interlocked.Increment(ref _cloudAsyncWalSegmentsSealed);
         Interlocked.Add(ref _cloudAsyncWalBytesSealed, bytes);
@@ -696,13 +709,16 @@ sealed class RuntimeTelemetry
     static void SetMaximum(ref ulong target, ulong value)
     {
         var current = Volatile.Read(ref target);
+
         while (current < value)
         {
             var observed = Interlocked.CompareExchange(ref target, value, current);
+
             if (observed == current)
             {
                 return;
             }
+
 
             current = observed;
         }
@@ -711,13 +727,16 @@ sealed class RuntimeTelemetry
     static void SetMaximum(ref long target, long value)
     {
         var current = Volatile.Read(ref target);
+
         while (value > current)
         {
             var observed = Interlocked.CompareExchange(ref target, value, current);
+
             if (observed == current)
             {
                 return;
             }
+
 
             current = observed;
         }

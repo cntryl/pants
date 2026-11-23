@@ -127,7 +127,8 @@ public sealed class PantsRuntimeOperationsTests
     static async ValueTask PutWithWriteStallRetryAsync(
         IPantsDatabase database,
         string key,
-        byte[] value)
+        byte[] value
+    )
     {
         for (var attempt = 0; attempt < 16; attempt++)
         {
@@ -135,6 +136,7 @@ public sealed class PantsRuntimeOperationsTests
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put(TestBytes.FromString(key), value);
+
             try
             {
                 await transaction.CommitAsync(PantsWriteOptions.Buffered);
@@ -155,7 +157,8 @@ public sealed class PantsRuntimeOperationsTests
         IPantsDatabase database,
         IPantsColumnFamily columnFamily,
         string key,
-        string value)
+        string value
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             columnFamily,

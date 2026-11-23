@@ -48,6 +48,7 @@ public sealed class WalTransactionFamilyTests
         };
         recovery.Accept(begin, (_, _) => applied++);
         var member = WalCodec.DecodeRecord(WalCodec.EncodeTransactionMutation(Mutation(wrongCommit ? 7U : 3U), 1, 1));
+
         if (wrongCommit)
         {
             recovery.Accept(member, (_, _) => applied++);
@@ -61,6 +62,7 @@ public sealed class WalTransactionFamilyTests
         {
             Assert.Throws<PantsCorruptionException>(() => recovery.Accept(member, (_, _) => applied++));
         }
+
 
         Assert.Equal(0, applied);
     }
@@ -96,6 +98,7 @@ public sealed class WalTransactionFamilyTests
         var recoveredFamily = await reopened.ColumnFamilies.GetAsync("side");
         Assert.NotNull(recoveredFamily);
         await using var reader = await reopened.Transactions.BeginAsync(recoveredFamily, PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 100; index++)
         {
             Assert.Equal(new byte[512], (await reader.GetAsync(BitConverter.GetBytes(index)))?.ToArray());

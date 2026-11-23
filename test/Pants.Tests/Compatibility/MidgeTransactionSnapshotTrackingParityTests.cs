@@ -25,11 +25,13 @@ public sealed class MidgeTransactionSnapshotTrackingParityTests
                     new RuntimeDependencies(compactionGate));
             var family = await database.ColumnFamilies.CreateAsync("concurrent-snapshot");
             var initialGenerations = mode == "memory" ? 1 : 4;
+
             for (var generation = 0; generation < initialGenerations; generation++)
             {
                 await PutRowsAsync(database, mode, family, "concurrent_key_", 32, "baseline");
                 await database.Maintenance.FlushAsync(family);
             }
+
 
             await using var snapshot = await BeginReadAsync(database, family);
             var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -37,6 +39,7 @@ public sealed class MidgeTransactionSnapshotTrackingParityTests
             var compactionWorker = Task.Run(async () =>
             {
                 await start.Task;
+
                 for (var round = 0; round < 5; round++)
                 {
                     await PutRowsAsync(
@@ -52,6 +55,7 @@ public sealed class MidgeTransactionSnapshotTrackingParityTests
             });
 
             start.SetResult();
+
             if (compactionGate is not null)
             {
                 try
@@ -68,6 +72,7 @@ public sealed class MidgeTransactionSnapshotTrackingParityTests
             else
             {
                 var scansWhileWorkerRunning = 0;
+
                 while (!compactionWorker.IsCompleted)
                 {
                     await AssertSnapshotRowsAsync(snapshot, "concurrent_key_", 32, "baseline");
@@ -75,8 +80,10 @@ public sealed class MidgeTransactionSnapshotTrackingParityTests
                     await Task.Yield();
                 }
 
+
                 Assert.True(scansWhileWorkerRunning > 0, $"mode: {mode}");
             }
+
 
             await compactionWorker.WaitAsync(TestTimeouts.Expected);
             await AssertSnapshotRowsAsync(snapshot, "concurrent_key_", 32, "baseline");
@@ -118,11 +125,13 @@ public sealed class MidgeTransactionSnapshotTrackingParityTests
         var options = LocalOptions(directory.Path);
         await using var database = await PantsDatabase.OpenAsync(options);
         var family = await database.ColumnFamilies.CreateAsync("iterator-snapshot");
+
         for (var generation = 0; generation < 4; generation++)
         {
             await PutRowsAsync(database, "local", family, "row-", 27, "baseline");
             await database.Maintenance.FlushAsync(family);
         }
+
 
         var inputs = (await database.Diagnostics.GetStorageLayoutAsync())
             .Levels
@@ -158,10 +167,12 @@ public sealed class MidgeTransactionSnapshotTrackingParityTests
             Assert.True((await database.Diagnostics.GetRuntimeMetricsAsync()).PinnedSsts > 0);
 
             var remaining = new List<PantsEntry>();
+
             while (await iterator.MoveNextAsync())
             {
                 remaining.Add(iterator.Current);
             }
+
 
             Assert.Equal(26, remaining.Count);
             Assert.All(remaining, entry =>
@@ -224,11 +235,13 @@ public sealed class MidgeTransactionSnapshotTrackingParityTests
             }
 
             await database.Maintenance.FlushAsync(family);
+
             for (var index = 0; index < 2; index++)
             {
                 await PutAsync(database, mode, family, $"filler-{index}", "value");
                 await database.Maintenance.FlushAsync(family);
             }
+
 
             var before = await database.Diagnostics.GetStorageLayoutAsync();
             Assert.Equal(4, before.Levels.Single(static level => level.Level == 0).FileCount);
@@ -365,10 +378,12 @@ public sealed class MidgeTransactionSnapshotTrackingParityTests
             await database.ColumnFamilies.DropAsync(family);
 
             var remaining = new List<string>();
+
             while (await iterator.MoveNextAsync())
             {
                 remaining.Add(TestBytes.ToText(iterator.Current.Key));
             }
+
 
             Assert.Equal(["b", "c"], remaining);
             var beginError = await Assert.ThrowsAsync<PantsInvalidArgumentException>(() =>
@@ -407,12 +422,14 @@ public sealed class MidgeTransactionSnapshotTrackingParityTests
         await database.Maintenance.CompactAllAsync();
         await using var reader = await BeginReadAsync(database, family);
         Assert.Equal("new", TestBytes.ToText((await reader.GetAsync("middle"u8.ToArray()))!.Value));
+
         foreach (var direction in new[] { PantsScanDirection.Forward, PantsScanDirection.Reverse })
         {
             var rows = await CollectAsync(await reader.ScanAsync(new PantsScanQuery { Direction = direction }));
             Assert.Contains(rows, entry =>
                 TestBytes.ToText(entry.Key) == "middle" && TestBytes.ToText(entry.Value) == "new");
         }
+
 
         var after = await database.Diagnostics.GetStorageLayoutAsync();
         Assert.Contains(after.Levels, static level => level.Level == 1 && level.FileCount > 0);
@@ -495,12 +512,14 @@ public sealed class MidgeTransactionSnapshotTrackingParityTests
 
     static ValueTask<IPantsTransaction> BeginWriteAsync(
         IPantsDatabase database,
-        IPantsColumnFamily family) =>
+        IPantsColumnFamily family
+    ) =>
         database.Transactions.BeginAsync(family, PantsTransactionMode.ReadWrite);
 
     static ValueTask<IPantsTransaction> BeginReadAsync(
         IPantsDatabase database,
-        IPantsColumnFamily family) =>
+        IPantsColumnFamily family
+    ) =>
         database.Transactions.BeginAsync(family, PantsTransactionMode.ReadOnly);
 
     static PantsWriteOptions WriteOptions(string mode) =>
@@ -511,7 +530,8 @@ public sealed class MidgeTransactionSnapshotTrackingParityTests
         string mode,
         IPantsColumnFamily family,
         string key,
-        string value)
+        string value
+    )
     {
         await using var transaction = await BeginWriteAsync(database, family);
         transaction.Put(TestBytes.FromString(key), TestBytes.FromString(value));
@@ -524,15 +544,18 @@ public sealed class MidgeTransactionSnapshotTrackingParityTests
         IPantsColumnFamily family,
         string keyPrefix,
         int count,
-        string value)
+        string value
+    )
     {
         await using var transaction = await BeginWriteAsync(database, family);
+
         for (var index = 0; index < count; index++)
         {
             transaction.Put(
                 TestBytes.FromString($"{keyPrefix}{index:000}"),
                 TestBytes.FromString(value));
         }
+
 
         await transaction.CommitAsync(WriteOptions(mode));
     }
@@ -541,7 +564,8 @@ public sealed class MidgeTransactionSnapshotTrackingParityTests
         IPantsTransaction snapshot,
         string keyPrefix,
         int count,
-        string expectedValue)
+        string expectedValue
+    )
     {
         var rows = await CollectAsync(await snapshot.ScanAsync(new PantsScanQuery()));
         Assert.Equal(count, rows.Count);
@@ -557,10 +581,12 @@ public sealed class MidgeTransactionSnapshotTrackingParityTests
         await using (scan)
         {
             var entries = new List<PantsEntry>();
+
             await foreach (var entry in scan)
             {
                 entries.Add(entry);
             }
+
 
             return entries;
         }

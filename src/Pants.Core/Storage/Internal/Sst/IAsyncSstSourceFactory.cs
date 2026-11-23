@@ -4,5 +4,6 @@ interface IAsyncSstSourceFactory
 {
     ValueTask<IAsyncSstSource?> OpenAsync(
         FileMeta file,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }

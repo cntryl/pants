@@ -32,19 +32,24 @@ sealed class InMemoryCloudProviderHandler : HttpMessageHandler
 
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var protocol = IdentifyProtocol(request);
+
         if (IsListRequest(request, protocol))
         {
             return CreateListResponse(request, protocol);
         }
 
+
         var identity = ReadObjectIdentity(request, protocol);
+
         if (request.Method == HttpMethod.Get || request.Method == HttpMethod.Head)
         {
             return CreateReadResponse(request, protocol, identity);
         }
+
 
         if (request.Method == HttpMethod.Delete)
         {
@@ -64,7 +69,8 @@ sealed class InMemoryCloudProviderHandler : HttpMessageHandler
     HttpResponseMessage CreateReadResponse(
         HttpRequestMessage request,
         string protocol,
-        string identity)
+        string identity
+    )
     {
         lock (_gate)
         {
@@ -93,6 +99,7 @@ sealed class InMemoryCloudProviderHandler : HttpMessageHandler
                 request.Headers.Range is null ? HttpStatusCode.OK : HttpStatusCode.PartialContent,
                 protocol,
                 ApplyRange(request, value));
+
             if (request.Headers.Range?.Ranges.SingleOrDefault() is { } range)
             {
                 response.Content.Headers.ContentRange = new ContentRangeHeaderValue(
@@ -100,6 +107,7 @@ sealed class InMemoryCloudProviderHandler : HttpMessageHandler
                     range.To ?? value.Data.Length - 1,
                     value.Data.Length);
             }
+
 
             return response;
         }
@@ -109,15 +117,18 @@ sealed class InMemoryCloudProviderHandler : HttpMessageHandler
         HttpRequestMessage request,
         string protocol,
         string identity,
-        byte[] data)
+        byte[] data
+    )
     {
         lock (_gate)
         {
             var exists = _objects.TryGetValue(identity, out var current);
+
             if (!ConditionMatches(request, protocol, exists, current.Version))
             {
                 return CreatePredicateFailure(protocol);
             }
+
 
             var next = (data, exists ? checked(current.Version + 1) : 1);
             _objects[identity] = next;
@@ -129,7 +140,8 @@ sealed class InMemoryCloudProviderHandler : HttpMessageHandler
     HttpResponseMessage Delete(
         HttpRequestMessage request,
         string protocol,
-        string identity)
+        string identity
+    )
     {
         lock (_gate)
         {
@@ -186,7 +198,8 @@ sealed class InMemoryCloudProviderHandler : HttpMessageHandler
         HttpRequestMessage request,
         string protocol,
         bool exists,
-        long currentVersion)
+        long currentVersion
+    )
     {
         if (protocol is GcsJsonProtocol or GcsXmlProtocol)
         {
@@ -195,10 +208,12 @@ sealed class InMemoryCloudProviderHandler : HttpMessageHandler
                 : request.Headers.TryGetValues("x-goog-if-generation-match", out var generations)
                     ? generations.Single()
                     : null;
+
             if (expected == "0")
             {
                 return !exists;
             }
+
 
             return expected is null ||
                    (exists && StringComparer.Ordinal.Equals(
@@ -219,13 +234,15 @@ sealed class InMemoryCloudProviderHandler : HttpMessageHandler
     static HttpResponseMessage CreateObjectResponse(
         HttpStatusCode statusCode,
         string protocol,
-        (byte[] Data, long Version) value)
+        (byte[] Data, long Version) value
+    )
     {
         var response = new HttpResponseMessage(statusCode)
         {
             Content = new ByteArrayContent(value.Data)
         };
         response.Headers.ETag = new EntityTagHeaderValue(FormatEtag(value.Version));
+
         if (protocol is GcsJsonProtocol or GcsXmlProtocol)
         {
             response.Headers.TryAddWithoutValidation(
@@ -233,18 +250,22 @@ sealed class InMemoryCloudProviderHandler : HttpMessageHandler
                 value.Version.ToString(CultureInfo.InvariantCulture));
         }
 
+
         return response;
     }
 
     static (byte[] Data, long Version) ApplyRange(
         HttpRequestMessage request,
-        (byte[] Data, long Version) value)
+        (byte[] Data, long Version) value
+    )
     {
         var range = request.Headers.Range?.Ranges.SingleOrDefault();
+
         if (range is null)
         {
             return value;
         }
+
 
         var start = checked((int)(range.From ?? 0));
         var end = checked((int)(range.To ?? value.Data.Length - 1));
@@ -266,10 +287,12 @@ sealed class InMemoryCloudProviderHandler : HttpMessageHandler
         {
             Content = new StringContent(content, Encoding.UTF8)
         };
+
         if (protocol == AzureProtocol)
         {
             response.Headers.TryAddWithoutValidation("x-ms-error-code", "ConditionNotMet");
         }
+
 
         return response;
     }
@@ -292,10 +315,12 @@ sealed class InMemoryCloudProviderHandler : HttpMessageHandler
         {
             var marker = "/b/";
             var start = uri.AbsolutePath.IndexOf(marker, StringComparison.Ordinal);
+
             if (start < 0)
             {
                 throw new InvalidOperationException("GCS JSON request did not contain a bucket.");
             }
+
 
             start += marker.Length;
             var end = uri.AbsolutePath.IndexOf('/', start);
@@ -373,6 +398,7 @@ sealed class InMemoryCloudProviderHandler : HttpMessageHandler
                      .Split('&', StringSplitOptions.RemoveEmptyEntries))
         {
             var pair = parameter.Split('=', 2);
+
             if (StringComparer.Ordinal.Equals(Unescape(pair[0]), name))
             {
                 return pair.ElementAtOrDefault(1) is { } value

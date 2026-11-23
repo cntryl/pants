@@ -12,7 +12,8 @@ sealed class TransactionIntentOperation
         TimeSpan? timeToLive,
         DateTimeOffset? expiryUtc,
         bool insertOnly,
-        ulong? expirationUnixMilliseconds = null)
+        ulong? expirationUnixMilliseconds = null
+    )
     {
         Ordinal = ordinal;
         Kind = kind;

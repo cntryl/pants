@@ -59,7 +59,8 @@ public sealed class MidgeProviderCloudControlParityTests
     static ValueTask<IPantsDatabase> OpenAsync(
         string cachePath,
         PantsCloudStorageLocation location,
-        RuntimeDependencies dependencies) =>
+        RuntimeDependencies dependencies
+    ) =>
         PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(cachePath, location).WithBackgroundCompaction(false),
             dependencies);
@@ -68,7 +69,8 @@ public sealed class MidgeProviderCloudControlParityTests
         IPantsDatabase database,
         ReadOnlyMemory<byte> key,
         ReadOnlyMemory<byte> value,
-        PantsWriteOptions options)
+        PantsWriteOptions options
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -80,7 +82,8 @@ public sealed class MidgeProviderCloudControlParityTests
     static async Task DeleteAsync(
         IPantsDatabase database,
         ReadOnlyMemory<byte> key,
-        PantsWriteOptions options)
+        PantsWriteOptions options
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -92,7 +95,8 @@ public sealed class MidgeProviderCloudControlParityTests
     static async Task AssertValueAsync(
         IPantsTransaction reader,
         ReadOnlyMemory<byte> key,
-        ReadOnlyMemory<byte> expected) =>
+        ReadOnlyMemory<byte> expected
+    ) =>
         Assert.Equal(
             TestBytes.ToText(expected),
             TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(await reader.GetAsync(key))));

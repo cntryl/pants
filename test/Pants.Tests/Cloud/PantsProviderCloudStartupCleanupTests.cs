@@ -190,6 +190,7 @@ public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper outp
             $"{coldStartSstFullReads} full, {coldStartSstRangeReads} ranges / " +
             $"{coldStartSstRangeBytes} bytes; " +
             $"runtime response timeout {runtimeResponseTimeout.TotalSeconds:F0} s.");
+
         foreach (var measurement in measurements)
         {
             output.WriteLine(
@@ -228,6 +229,7 @@ public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper outp
             if (Interlocked.Exchange(ref _stopped, 1) == 0)
             {
                 _cancellation.Cancel();
+
                 try
                 {
                     try
@@ -253,6 +255,7 @@ public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper outp
         async Task SampleUntilCanceledAsync()
         {
             using var timer = new PeriodicTimer(SamplingInterval);
+
             while (await timer.WaitForNextTickAsync(_cancellation.Token).ConfigureAwait(false))
             {
                 Sample();
@@ -263,13 +266,16 @@ public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper outp
         {
             var bytes = MeasureDirectoryBytes(_rootPath);
             var observedPeak = Volatile.Read(ref _peakBytes);
+
             while (bytes > observedPeak)
             {
                 var priorPeak = Interlocked.CompareExchange(ref _peakBytes, bytes, observedPeak);
+
                 if (priorPeak == observedPeak)
                 {
                     return;
                 }
+
 
                 observedPeak = priorPeak;
             }
@@ -278,6 +284,7 @@ public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper outp
         static long MeasureDirectoryBytes(string rootPath)
         {
             var total = 0L;
+
             foreach (var path in Directory.EnumerateFiles(rootPath, "*", SearchOption.AllDirectories))
             {
                 try
@@ -290,6 +297,7 @@ public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper outp
                     // Startup cleanup can remove a file between enumeration and measurement.
                 }
             }
+
 
             return total;
         }
@@ -359,7 +367,8 @@ public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper outp
     static ValueTask<IPantsDatabase> OpenAsync(
         string cachePath,
         PantsCloudStorageLocation location,
-        RuntimeDependencies dependencies) =>
+        RuntimeDependencies dependencies
+    ) =>
         PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(cachePath, location)
                 .WithBackgroundCompaction(false),

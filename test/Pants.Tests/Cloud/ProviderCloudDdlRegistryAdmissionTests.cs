@@ -233,7 +233,8 @@ public sealed class ProviderCloudDdlRegistryAdmissionTests
         string root,
         ScriptedCloudObjectStore controlStore,
         CloudLeaseCoordinator lease,
-        ResourceBudget budget) =>
+        ResourceBudget budget
+    ) =>
         new(
             root,
             new ScriptedCloudObjectStore(),

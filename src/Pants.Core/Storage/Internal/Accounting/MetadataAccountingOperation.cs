@@ -8,8 +8,13 @@ sealed class MetadataAccountingOperation : IDisposable
     readonly MetadataOperationKind _kind;
     readonly int _bucket;
 
-    public MetadataAccountingOperation(MetadataAccountingState state, TimeProvider timeProvider,
-        MetadataOperationKind kind, MetadataOrigin origin, MetadataMedium medium)
+    public MetadataAccountingOperation(
+        MetadataAccountingState state,
+        TimeProvider timeProvider,
+        MetadataOperationKind kind,
+        MetadataOrigin origin,
+        MetadataMedium medium
+    )
     {
         _state = state;
         _timeProvider = timeProvider;
@@ -54,6 +59,7 @@ sealed class MetadataAccountingOperation : IDisposable
     {
         var elapsed = MetadataAccountingArithmetic.Nanoseconds(_timeProvider.GetElapsedTime(_started), out var valid);
         var counters = Ledger.Seal(_kind, elapsed, succeeded, abandoned, !valid);
+
         if (counters is { } completed)
         {
             _state.Fold(_bucket, completed.Counters, completed.Overflow, true);

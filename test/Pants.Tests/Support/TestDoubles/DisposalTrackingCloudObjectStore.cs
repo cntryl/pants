@@ -17,19 +17,22 @@ sealed class DisposalTrackingCloudObjectStore(Exception? disposalFailure = null)
         string objectKey,
         ReadOnlyMemory<byte> data,
         CloudObjectWriteCondition condition,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         _inner.PutAsync(objectKey, data, condition, cancellationToken);
 
     public ValueTask<CloudObjectListPage> ListPageAsync(
         string prefix,
         string? continuationToken,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         _inner.ListPageAsync(prefix, continuationToken, cancellationToken);
 
     public ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
         string objectKey,
         CloudObjectDeleteCondition condition,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         _inner.DeleteAsync(objectKey, condition, cancellationToken);
 
     public ValueTask DisposeAsync()

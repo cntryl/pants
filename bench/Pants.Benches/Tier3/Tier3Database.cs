@@ -24,22 +24,26 @@ static class Tier3Database
     public static async ValueTask PutBatchAsync(
         IPantsDatabase database,
         IEnumerable<(byte[] Key, byte[] Value)> entries,
-        PantsWriteOptions writeOptions)
+        PantsWriteOptions writeOptions
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
+
         foreach (var (key, value) in entries)
         {
             transaction.Put(key, value);
         }
+
 
         await transaction.CommitAsync(writeOptions);
     }
 
     public static async ValueTask<ReadOnlyMemory<byte>?> GetAsync(
         IPantsDatabase database,
-        ReadOnlyMemory<byte> key)
+        ReadOnlyMemory<byte> key
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,

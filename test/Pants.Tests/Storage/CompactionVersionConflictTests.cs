@@ -17,7 +17,10 @@ public sealed class CompactionVersionConflictTests
     [Theory]
     [MemberData(nameof(ConflictingVersions))]
     public void ShouldRejectConflictingLogicalVersionsEvenWhenANewerValueHidesThem(
-        bool streaming, string difference, bool hidden)
+        bool streaming,
+        string difference,
+        bool hidden
+    )
     {
         var first = Entry("first", 7);
         var second = difference switch
@@ -69,15 +72,18 @@ public sealed class CompactionVersionConflictTests
         SstEntry[] left,
         SstEntry[] right,
         RangeTombstone[]? ranges = null,
-        ulong? horizon = null)
+        ulong? horizon = null
+    )
     {
         var plan = new CompactionPlan(0, 1, 0, horizon, true, true, []);
+
         if (!streaming)
         {
             return CompactionMerger.Merge(
                 [new SstContents(left, ranges ?? [], 1), new SstContents(right, [], 1)], plan)
                 .Entries.ToArray();
         }
+
 
         using var directory = new TemporaryDirectory();
         var leftPath = Path.Combine(directory.Path, "left.sst");
@@ -87,6 +93,7 @@ public sealed class CompactionVersionConflictTests
         using var leftReader = SstReader.Open(leftPath);
         using var rightReader = SstReader.Open(rightPath);
         var budget = new ResourceBudget(1024 * 1024);
+
         try
         {
             return StreamingCompactionMerger.MergeAndPartition(

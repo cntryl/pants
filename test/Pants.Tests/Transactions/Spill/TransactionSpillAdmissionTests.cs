@@ -146,6 +146,7 @@ public sealed class TransactionSpillAdmissionTests
     {
         var family = new ColumnFamilyIdentity(0, "default", 0);
         var operations = new List<TransactionIntentOperation>(puts + ranges);
+
         for (var index = 0; index < puts; index++)
         {
             operations.Add(new TransactionIntentOperation(
@@ -159,6 +160,7 @@ public sealed class TransactionSpillAdmissionTests
                 null,
                 false));
         }
+
 
         for (var index = 0; index < ranges; index++)
         {

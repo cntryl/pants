@@ -81,7 +81,8 @@ public sealed class ProviderTornMetadataHydrationTests
     static ValueTask<ProviderCloudHydrationResult> HydrateAsync(
         string cachePath,
         ICloudObjectStore control,
-        PantsRecoveryPolicy policy) =>
+        PantsRecoveryPolicy policy
+    ) =>
         ProviderCloudPersistence.HydrateLocalCacheAsync(
             cachePath,
             new CountingCloudObjectStore(),
@@ -102,7 +103,8 @@ public sealed class ProviderTornMetadataHydrationTests
             string objectKey,
             ulong offset,
             int length,
-            CancellationToken cancellationToken) =>
+            CancellationToken cancellationToken
+        ) =>
             objectKey == failingKey
                 ? throw new PantsIOException("Injected read failure.")
                 : inner.GetRangeAsync(objectKey, offset, length, cancellationToken);
@@ -114,19 +116,22 @@ public sealed class ProviderTornMetadataHydrationTests
             string objectKey,
             ReadOnlyMemory<byte> data,
             CloudObjectWriteCondition condition,
-            CancellationToken cancellationToken) =>
+            CancellationToken cancellationToken
+        ) =>
             inner.PutAsync(objectKey, data, condition, cancellationToken);
 
         public ValueTask<CloudObjectListPage> ListPageAsync(
             string prefix,
             string? continuationToken,
-            CancellationToken cancellationToken) =>
+            CancellationToken cancellationToken
+        ) =>
             inner.ListPageAsync(prefix, continuationToken, cancellationToken);
 
         public ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
             string objectKey,
             CloudObjectDeleteCondition condition,
-            CancellationToken cancellationToken) =>
+            CancellationToken cancellationToken
+        ) =>
             inner.DeleteAsync(objectKey, condition, cancellationToken);
     }
 }

@@ -35,7 +35,8 @@ sealed class ImmutableFlushPipeline
             ValueTask<bool>> completeAttemptAsync,
         Func<ImmutableMemtableFlush, int, ValueTask> retryAttemptAsync,
         Func<bool> isDisposed,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null
+    )
     {
         _telemetry = telemetry;
         _scheduleWorkerAsync = scheduleWorkerAsync;
@@ -47,7 +48,8 @@ sealed class ImmutableFlushPipeline
 
     public async ValueTask ScheduleNextAsync(
         IReadOnlyCollection<ImmutableMemtableFlush> flushes,
-        bool retryFailure)
+        bool retryFailure
+    )
     {
         var next = flushes
             .OrderBy(static flush => flush.Frozen.FrontierSequence)
@@ -56,21 +58,25 @@ sealed class ImmutableFlushPipeline
             .GroupBy(static flush => flush.Frozen.ColumnFamily)
             .Select(static family => family.First())
             .FirstOrDefault(flush => !flush.IsRunning && (!flush.HasFailed || retryFailure));
+
         if (next is null)
         {
             return;
         }
+
 
         await ScheduleAttemptAsync(next).ConfigureAwait(false);
     }
 
     public static async ValueTask AwaitAttemptsAsync(
         IReadOnlyList<Task<Exception?>> attempts,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         foreach (var attempt in attempts)
         {
             var failure = await attempt.WaitAsync(cancellationToken).ConfigureAwait(false);
+
             if (failure is not null)
             {
                 throw failure;
@@ -80,13 +86,15 @@ sealed class ImmutableFlushPipeline
 
     public static async ValueTask AwaitWorkersAsync(
         IReadOnlyCollection<ImmutableMemtableFlush> flushes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var workers = flushes
             .Select(static flush => flush.RunningTask)
             .Where(static task => task is not null)
             .Cast<Task>()
             .ToArray();
+
         foreach (var worker in workers)
         {
             try
@@ -109,6 +117,7 @@ sealed class ImmutableFlushPipeline
 
         flush.BeginAttempt();
         Task<FrozenFlushRuntimeResult> workerTask;
+
         try
         {
             workerTask = await _scheduleWorkerAsync(
@@ -124,16 +133,19 @@ sealed class ImmutableFlushPipeline
             return;
         }
 
+
         flush.AttachRunningTask(workerTask);
         _ = ObserveAttemptAsync(flush, workerTask);
     }
 
     async Task ObserveAttemptAsync(
         ImmutableMemtableFlush expected,
-        Task<FrozenFlushRuntimeResult> workerTask)
+        Task<FrozenFlushRuntimeResult> workerTask
+    )
     {
         var result = (FrozenFlushRuntimeResult?)null;
         var failure = (Exception?)null;
+
         try
         {
             result = await workerTask.ConfigureAwait(false);
@@ -149,10 +161,12 @@ sealed class ImmutableFlushPipeline
             failure = RuntimeExceptionMapper.ToPublicException(exception);
         }
 
+
         try
         {
             var shouldRetry = await _completeAttemptAsync(expected, result, failure)
                 .ConfigureAwait(false);
+
             if (failure is not null && shouldRetry)
             {
                 _ = RetryAfterDelayAsync(
@@ -170,13 +184,16 @@ sealed class ImmutableFlushPipeline
     async Task RetryAfterDelayAsync(
         ImmutableMemtableFlush expected,
         int failedAttempt,
-        TimeSpan delay)
+        TimeSpan delay
+    )
     {
         await Task.Delay(delay, _timeProvider, CancellationToken.None).ConfigureAwait(false);
+
         if (_isDisposed())
         {
             return;
         }
+
 
         try
         {

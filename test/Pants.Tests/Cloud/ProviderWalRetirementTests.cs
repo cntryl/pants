@@ -28,10 +28,12 @@ public sealed class ProviderWalRetirementTests
         Assert.Equal(new WalRetirementResult(WalRetirementOutcome.Settled, 1), result);
         Assert.Empty(harness.CatalogSegmentIds());
         Assert.False(harness.Wal.Contains(segment.ObjectKey));
+
         foreach (var file in unrelated)
         {
             Assert.Empty(harness.Sst.RequestsFor(PantsCloudObjectLayout.SstPrefix + file.Name));
         }
+
 
         Assert.All(
             harness.Sst.RequestsFor(PantsCloudObjectLayout.SstPrefix + covering.Name),
@@ -433,6 +435,7 @@ public sealed class ProviderWalRetirementTests
     static void AssertResumedWithoutRereading(ulong[] offsets)
     {
         Assert.Equal(0UL, offsets[0]);
+
         for (var index = 1; index < offsets.Length; index++)
         {
             Assert.True(
@@ -458,7 +461,8 @@ public sealed class ProviderWalRetirementTests
             CloudLeaseCoordinator lease,
             TestCloudLeaseStore leaseStore,
             ulong epoch,
-            bool supportsRanges)
+            bool supportsRanges
+        )
         {
             _budgetBytes = budgetBytes;
             _lease = lease;
@@ -489,7 +493,8 @@ public sealed class ProviderWalRetirementTests
             long budgetBytes = 64L * 1024 * 1024,
             TimeSpan? quantum = null,
             bool supportsRanges = true,
-            IFailpointHandler? failpoints = null)
+            IFailpointHandler? failpoints = null
+        )
         {
             var leaseStore = new TestCloudLeaseStore();
             var lease = new CloudLeaseCoordinator(
@@ -516,7 +521,8 @@ public sealed class ProviderWalRetirementTests
 
         public ProviderCloudPersistence CreatePersistence(
             TimeSpan quantum,
-            IFailpointHandler? failpoints = null)
+            IFailpointHandler? failpoints = null
+        )
         {
             Budget = new ResourceBudget(_budgetBytes);
             return new ProviderCloudPersistence(
@@ -585,19 +591,23 @@ public sealed class ProviderWalRetirementTests
                 ColumnFamilies = files.Select(static file => file.ColumnFamilyId).Distinct().Where(static id => id != 0)
                     .Select(static id => new ColumnFamilyMeta { Id = id, Name = $"family-{id}" }).ToList()
             };
+
             foreach (var family in manifest.ColumnFamilies)
             {
                 manifest.FlushedThrough[family.Id] = _lastPersistedSequence;
             }
+
 
             CloudTestMetadata.SeedAsync(Control, manifest).GetAwaiter().GetResult();
         }
 
         public async Task<ProviderPublishedWalSegment> PublishSegmentAsync(
             ulong segmentId,
-            WalTestRecord[] records)
+            WalTestRecord[] records
+        )
         {
             using var stream = new MemoryStream();
+
             for (var index = 0; index < records.Length; index++)
             {
                 var record = records[index];
@@ -620,6 +630,7 @@ public sealed class ProviderWalRetirementTests
                 DiskFormat.WriteUInt32(stream, DiskFormat.Crc32C(payload));
                 stream.Write(payload);
             }
+
 
             var sealedSegment = TestWalSegment.SealRecords(segmentId, Epoch, $"{segmentId}.wal", stream.ToArray(), _lastPublished);
             await Persistence.PublishWalBatchAsync([sealedSegment], CancellationToken.None);
@@ -644,10 +655,12 @@ public sealed class ProviderWalRetirementTests
             for (var attempt = 1; attempt <= 1_000; attempt++)
             {
                 var result = await Persistence.RetireCoveredWalAsync(CancellationToken.None);
+
                 if (result.RetiredSegments > 0)
                 {
                     return attempt;
                 }
+
 
                 beforeRetired?.Invoke(result);
             }

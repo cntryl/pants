@@ -21,6 +21,7 @@ sealed class WalRetirementAdmission(ResourceBudget budget, MaintenanceMemoryGate
     public async ValueTask<IDisposable> AdmitAsync(long fetchBytes, CancellationToken cancellationToken)
     {
         var bytes = WorkspaceBytes(fetchBytes);
+
         if (bytes > budget.Limit)
         {
             throw new PantsResourceLimitException(
@@ -28,7 +29,9 @@ sealed class WalRetirementAdmission(ResourceBudget budget, MaintenanceMemoryGate
                 $"memory; the pool holds {budget.Limit}.");
         }
 
+
         var hold = await gate.EnterAsync(cancellationToken).ConfigureAwait(false);
+
         try
         {
             return new Admission(budget.Reserve(bytes), hold);

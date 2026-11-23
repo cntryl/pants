@@ -48,6 +48,7 @@ public sealed class SimulatedCloudLeaseInteropTests
             directory.Path, Path.Combine(directory.Path, "metadata", "lease"), CancellationToken.None);
         var mutation = Task.Run(async () => await store.PutAsync(
             key, "stale"u8.ToArray(), new CloudObjectWriteCondition.IfVersion(original.Version)));
+
         try
         {
             var completed = await Task.WhenAny(mutation, contended.Task).WaitAsync(TestTimeouts.Expected);
@@ -61,6 +62,7 @@ public sealed class SimulatedCloudLeaseInteropTests
             held.Dispose();
             _ = await mutation.WaitAsync(TestTimeouts.Expected);
         }
+
 
         Assert.False(await mutation);
         Assert.Equal("successor"u8.ToArray(), (await store.GetAsync(key))?.Data.ToArray());
@@ -79,6 +81,7 @@ public sealed class SimulatedCloudLeaseInteropTests
         using var cancellation = new CancellationTokenSource();
         var mutation = Task.Run(async () => await store.PutAsync(
             key, "cancelled"u8.ToArray(), new CloudObjectWriteCondition.Unconditional(), cancellation.Token));
+
         try
         {
             var completed = await Task.WhenAny(mutation, contended.Task).WaitAsync(TestTimeouts.Expected);
@@ -89,6 +92,7 @@ public sealed class SimulatedCloudLeaseInteropTests
         finally
         {
             held.Dispose();
+
             try
             {
                 _ = await mutation.WaitAsync(TestTimeouts.Expected);
@@ -97,6 +101,7 @@ public sealed class SimulatedCloudLeaseInteropTests
             {
             }
         }
+
 
         Assert.Equal("old"u8.ToArray(), (await store.GetAsync(key))?.Data.ToArray());
     }

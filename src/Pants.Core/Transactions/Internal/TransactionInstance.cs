@@ -31,7 +31,8 @@ sealed class TransactionInstance : IPantsTransaction
         string? persistentDatabasePath,
         StorageBudgetLedger? storageBudget = null,
         bool coordinatorRegistered = true,
-        SpillRunRetirement? spillRetirement = null)
+        SpillRunRetirement? spillRetirement = null
+    )
     {
         _database = database;
         _transactionId = transactionId;
@@ -70,10 +71,12 @@ sealed class TransactionInstance : IPantsTransaction
         lock (_gate)
         {
             EnsureActive();
+
             if (!Enum.IsDefined(conflictPolicy))
             {
                 throw PantsException.InvalidArgument("Conflict policy is invalid.");
             }
+
 
             _conflictPolicy = conflictPolicy;
         }
@@ -82,13 +85,15 @@ sealed class TransactionInstance : IPantsTransaction
     public void Put(
         ReadOnlyMemory<byte> key,
         ReadOnlyMemory<byte> value,
-        TimeSpan? timeToLive = null) =>
+        TimeSpan? timeToLive = null
+    ) =>
         StagePointWrite(key, value, timeToLive, false);
 
     public void Insert(
         ReadOnlyMemory<byte> key,
         ReadOnlyMemory<byte> value,
-        TimeSpan? timeToLive = null) =>
+        TimeSpan? timeToLive = null
+    ) =>
         StagePointWrite(key, value, timeToLive, true);
 
     public void Delete(ReadOnlyMemory<byte> key)
@@ -114,7 +119,8 @@ sealed class TransactionInstance : IPantsTransaction
 
     public void DeleteRange(
         ReadOnlyMemory<byte> startInclusive,
-        ReadOnlyMemory<byte> endExclusive)
+        ReadOnlyMemory<byte> endExclusive
+    )
     {
         lock (_gate)
         {
@@ -122,11 +128,13 @@ sealed class TransactionInstance : IPantsTransaction
             EntryAdmission.ValidateRangeDelete(startInclusive.Length, endExclusive.Length);
             var startCopy = startInclusive.ToArray();
             var endCopy = endExclusive.ToArray();
+
             if (ByteArrayComparer.Instance.Compare(startCopy, endCopy) >= 0)
             {
                 throw PantsException.InvalidArgument(
                     "DeleteRange requires startInclusive < endExclusive.");
             }
+
 
             StageIntent(new TransactionIntentOperation(
                     _nextOrdinal,
@@ -144,7 +152,8 @@ sealed class TransactionInstance : IPantsTransaction
 
     public void AssertValue(
         ReadOnlyMemory<byte> key,
-        ReadOnlyMemory<byte>? expectedValue)
+        ReadOnlyMemory<byte>? expectedValue
+    )
     {
         lock (_gate)
         {
@@ -165,30 +174,36 @@ sealed class TransactionInstance : IPantsTransaction
 
     public async ValueTask<ReadOnlyMemory<byte>?> GetAsync(
         ReadOnlyMemory<byte> key,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default
+    ) =>
         (await ReadPointWithAuthorityAsync(key, false, cancellationToken).ConfigureAwait(false)).Value;
 
     public ValueTask<PantsPointReadResult> GetWithDiagnosticsAsync(
         ReadOnlyMemory<byte> key,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default
+    ) =>
         ReadPointWithAuthorityAsync(key, true, cancellationToken);
 
     async ValueTask<PantsPointReadResult> ReadPointWithAuthorityAsync(
         ReadOnlyMemory<byte> key,
         bool collectDiagnostics,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _database.EnsureReadAuthority();
+
         try
         {
             var observation = new PointReadObservation(collectDiagnostics);
             var (_, value, _) = await PreparePointReadAsync(key, observation, cancellationToken)
                 .ConfigureAwait(false);
+
             if (observation.ReachedSsts)
             {
                 await _database.ReportPointReadAsync(observation, cancellationToken)
                     .ConfigureAwait(false);
             }
+
 
             return new PantsPointReadResult(CopyValue(value), observation.ReachedSsts && collectDiagnostics
                 ? observation.Trace
@@ -204,7 +219,8 @@ sealed class TransactionInstance : IPantsTransaction
 
     public async ValueTask<IPantsScan> ScanAsync(
         PantsScanQuery query,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentNullException.ThrowIfNull(query);
         cancellationToken.ThrowIfCancellationRequested();
@@ -217,6 +233,7 @@ sealed class TransactionInstance : IPantsTransaction
         }
 
         long snapshotId;
+
         try
         {
             snapshotId = await _database
@@ -229,6 +246,7 @@ sealed class TransactionInstance : IPantsTransaction
             throw;
         }
 
+
         try
         {
             var scan = new ScanInstance(
@@ -237,6 +255,7 @@ sealed class TransactionInstance : IPantsTransaction
                     IScanReadValidator? validator = null;
                     TransactionScanEnumerator? entries = null;
                     IReadOnlyList<AsyncSstScanSource> sstSources = [];
+
                     try
                     {
                         var candidates = SnapshotReadPath.ResolveCandidateFilesForRange(
@@ -312,12 +331,14 @@ sealed class TransactionInstance : IPantsTransaction
 
     public async ValueTask CommitAsync(
         PantsWriteOptions options,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default
+    ) =>
         _ = await CommitWithSequenceAsync(options, cancellationToken).ConfigureAwait(false);
 
     public async ValueTask<ulong> CommitWithSequenceAsync(
         PantsWriteOptions options,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentNullException.ThrowIfNull(options);
         cancellationToken.ThrowIfCancellationRequested();
@@ -329,6 +350,7 @@ sealed class TransactionInstance : IPantsTransaction
         }
 
         using var activity = PantsDiagnostics.ActivitySource.StartActivity("PantsTransaction.Commit");
+
         try
         {
             if (Mode != PantsTransactionMode.ReadOnly &&
@@ -398,9 +420,11 @@ sealed class TransactionInstance : IPantsTransaction
         }
 
         using var activity = PantsDiagnostics.ActivitySource.StartActivity("PantsTransaction.Rollback");
+
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
+
             if (_coordinatorRegistered)
             {
                 await _database.RollbackTransactionAsync(_transactionId, cancellationToken)
@@ -490,7 +514,8 @@ sealed class TransactionInstance : IPantsTransaction
         ReadOnlyMemory<byte> key,
         ReadOnlyMemory<byte> value,
         TimeSpan? timeToLive,
-        bool insertOnly)
+        bool insertOnly
+    )
     {
         lock (_gate)
         {
@@ -516,17 +541,20 @@ sealed class TransactionInstance : IPantsTransaction
     async ValueTask<(byte[]? Value, bool ResolvedByIntent)> ReadVisibleValueAsync(
         byte[] key,
         PointReadObservation observation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         IReadOnlyList<FileMeta> candidates;
         ulong? coveringRangeSequence;
         lock (_gate)
         {
             var lookup = LookupLatestIntent(key);
+
             if (lookup is not null)
             {
                 return (lookup.IsDeleted ? null : lookup.Value?.ToArray(), true);
             }
+
 
             if (_startSnapshot.Families.TryGetValue(_columnFamily.Identity, out var family) &&
                 family.TryGetValue(key, out var cell))
@@ -559,11 +587,13 @@ sealed class TransactionInstance : IPantsTransaction
                     observation,
                     cancellationToken)
                 .ConfigureAwait(false);
+
         if (coveringRangeSequence is { } rangeSequence &&
             (entry is null || rangeSequence > entry.Sequence))
         {
             return (null, false);
         }
+
 
         if (entry is null || entry.IsDelete || UnixTimestamp.IsExpired(entry.Expiration, _snapshotTime))
         {
@@ -576,7 +606,8 @@ sealed class TransactionInstance : IPantsTransaction
     async ValueTask<(byte[] Key, byte[]? Value, bool ResolvedByIntent)> PreparePointReadAsync(
         ReadOnlyMemory<byte> key,
         PointReadObservation observation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         byte[] keyCopy;
@@ -607,10 +638,12 @@ sealed class TransactionInstance : IPantsTransaction
     TransactionIntentLookup? LookupLatestIntent(ReadOnlySpan<byte> key)
     {
         var latest = _spillStore?.LatestBefore(ulong.MaxValue, key);
+
         foreach (var operation in _intentLog)
         {
             TransactionIntentLookup.Consider(ref latest, operation, key);
         }
+
 
         return latest;
     }
@@ -734,6 +767,7 @@ sealed class TransactionInstance : IPantsTransaction
     void EnsureWritable()
     {
         EnsureActive();
+
         if (Mode == PantsTransactionMode.ReadOnly)
         {
             throw PantsException.InvalidArgument("A read-only transaction cannot stage mutations.");

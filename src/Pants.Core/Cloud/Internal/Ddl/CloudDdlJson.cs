@@ -71,6 +71,7 @@ static class CloudDdlJson
         }
 
         var familyIds = new HashSet<uint>();
+
         foreach (var family in registry.ColumnFamilies)
         {
             if (family is null || !familyIds.Add(family.Id) || string.IsNullOrEmpty(family.Name))
@@ -79,7 +80,9 @@ static class CloudDdlJson
             }
         }
 
+
         var operationIds = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var operation in registry.Operations)
         {
             if (operation is null ||

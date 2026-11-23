@@ -177,6 +177,7 @@ public sealed class PantsFragmentationParityTests
             fixture.Options,
             new RuntimeDependencies(failpoint));
         var compaction = database.Maintenance.CompactAllAsync().AsTask();
+
         try
         {
             await failpoint.WaitUntilBlockedAsync(TestTimeouts.Expected);
@@ -204,6 +205,7 @@ public sealed class PantsFragmentationParityTests
         {
             failpoint.Release();
         }
+
 
         await compaction.WaitAsync(TestTimeouts.Expected);
         var finalLayout = await database.Diagnostics.GetStorageLayoutAsync();
@@ -317,12 +319,14 @@ public sealed class PantsFragmentationParityTests
             .Select(Describe)
             .ToArray();
         Assert.Equal(fixture.SourceEntries.Select(Describe), recoveredRows);
+
         foreach (var (name, expectedBytes) in fixture.TargetBytesByName)
         {
             Assert.Equal(
                 expectedBytes,
                 await File.ReadAllBytesAsync(Path.Combine(recoveryDirectory.Path, "sst", name)));
         }
+
 
         var recoveredRanges = outputNames
             .SelectMany(name => SstCodec.Decode(File.ReadAllBytes(
@@ -363,6 +367,7 @@ public sealed class PantsFragmentationParityTests
         AssertAuthoritativeInputsRemain(fixture);
         AssertNoCompactionIntent(fixture.RootPath);
         var stagingDirectory = Path.Combine(fixture.RootPath, "sst", ".flush-staging");
+
         if (Directory.Exists(stagingDirectory))
         {
             Assert.Empty(Directory.EnumerateFiles(
@@ -457,6 +462,7 @@ public sealed class PantsFragmentationParityTests
         };
         string? neighborName = null;
         byte[]? neighborBytes = null;
+
         if (shape == FragmentSourceShape.FinalKeyWithEndingRangeNeighbor)
         {
             neighborName = SstName(1, 20);
@@ -482,11 +488,13 @@ public sealed class PantsFragmentationParityTests
                 LargestSequence = 21
             });
         }
+
         var targetNames = new List<string>();
         var targetBytesByName = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         var targetKeys = shape == FragmentSourceShape.OversizedSplitBoundary
             ? [new string('b', 2 * 1024 * 1024)]
             : PlanTargetKeys;
+
         for (var index = 0; index < targetKeys.Length; index++)
         {
             var sequence = (ulong)index + 2;
@@ -516,6 +524,7 @@ public sealed class PantsFragmentationParityTests
             targetNames.Add(name);
             targetBytesByName.Add(name, bytes);
         }
+
 
         var manifest = new ManifestState
         {
@@ -551,7 +560,8 @@ public sealed class PantsFragmentationParityTests
     static PantsOpenOptions CreateOptions(
         string path,
         int l0FileCountTrigger = 2,
-        bool constrainedCompactionBudget = false)
+        bool constrainedCompactionBudget = false
+    )
     {
         var options = PantsOpenOptions.Local(path)
             .WithBackgroundCompaction(false)
@@ -614,7 +624,8 @@ public sealed class PantsFragmentationParityTests
         string? value,
         ulong sequence,
         ulong? expiration = null,
-        bool isDelete = false) =>
+        bool isDelete = false
+    ) =>
         new(
             TestBytes.FromString(key),
             value is null ? null : TestBytes.FromString(value),
@@ -667,12 +678,14 @@ public sealed class PantsFragmentationParityTests
                 .Concat(fixture.TargetNames)
                 .Order(StringComparer.Ordinal),
             names);
+
         if (fixture.NeighborName is not null)
         {
             Assert.Equal(
                 fixture.NeighborBytes,
                 File.ReadAllBytes(Path.Combine(fixture.RootPath, "sst", fixture.NeighborName)));
         }
+
 
         foreach (var (name, expectedBytes) in fixture.TargetBytesByName)
         {
@@ -685,10 +698,12 @@ public sealed class PantsFragmentationParityTests
     static void AssertNoCompactionIntent(string rootPath)
     {
         var path = Path.Combine(rootPath, "intent_log.json");
+
         if (!File.Exists(path))
         {
             return;
         }
+
 
         using var intent = IntentLogCodec.ToDocument(IntentLogCodec.Read(File.ReadAllBytes(path)).Entries);
         Assert.Empty(intent.RootElement.EnumerateArray());
@@ -712,10 +727,12 @@ public sealed class PantsFragmentationParityTests
                      SearchOption.AllDirectories))
         {
             var relativePath = Path.GetRelativePath(source, sourceFile);
+
             if (relativePath is "LOCK" or ".midge_leader.lock")
             {
                 continue;
             }
+
 
             var destinationFile = Path.Combine(destination, relativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(destinationFile)!);

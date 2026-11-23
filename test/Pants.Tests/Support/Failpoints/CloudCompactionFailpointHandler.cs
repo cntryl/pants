@@ -26,6 +26,7 @@ sealed class CloudCompactionFailpointHandler : IFailpointHandler
         }
 
         beforeFailure?.Invoke();
+
         if (shouldThrow)
         {
             throw new IOException($"Injected failure at {failpoint}.");

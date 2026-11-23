@@ -58,6 +58,7 @@ static class CrashSoakStorage
     public static void DiscardLocalCache(CrashSoakBackend backend, string root)
     {
         var path = DatabasePath(root);
+
         switch (backend)
         {
             case CrashSoakBackend.SimulatedCloud:

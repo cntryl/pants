@@ -125,9 +125,11 @@ public sealed class MidgeTransactionParityTests
 
             await using var reopened = await OpenAsync(mode, path);
             await using var reader = await BeginReadAsync(reopened);
+
             for (var index = 0; index < 10; index++)
             {
                 var actual = await reader.GetAsync(TestBytes.FromString($"key{index}"));
+
                 if (index is >= 3 and < 7)
                 {
                     Assert.Null(actual);
@@ -280,6 +282,7 @@ public sealed class MidgeTransactionParityTests
         }
 
         await using var reader = await BeginReadAsync(database);
+
         for (var index = 0; index < 500; index++)
         {
             Assert.Equal("value", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
@@ -322,6 +325,7 @@ public sealed class MidgeTransactionParityTests
     public async Task ShouldPreserveLastCommittedValueGivenSequentialOverwrites()
     {
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+
         for (var index = 0; index < 100; index++)
         {
             await PutAsync(
@@ -331,6 +335,7 @@ public sealed class MidgeTransactionParityTests
                 index.ToString(CultureInfo.InvariantCulture));
         }
 
+
         Assert.Equal("99", await ReadAsync(database, "counter"));
     }
 
@@ -338,7 +343,8 @@ public sealed class MidgeTransactionParityTests
         IPantsDatabase database,
         int threadCount,
         int operationsPerThread,
-        Func<int, int, (string Key, string Value)> makeEntry) =>
+        Func<int, int, (string Key, string Value)> makeEntry
+    ) =>
         await RunConcurrentWorkersAsync(threadCount, async threadId =>
         {
             for (var operationId = 0; operationId < operationsPerThread; operationId++)
@@ -357,10 +363,12 @@ public sealed class MidgeTransactionParityTests
             .Select(async workerId =>
             {
                 await Task.Yield();
+
                 if (Interlocked.Increment(ref readyWorkers) == workerCount)
                 {
                     ready.TrySetResult(true);
                 }
+
                 await start.Task;
                 await worker(workerId);
             })
@@ -373,14 +381,17 @@ public sealed class MidgeTransactionParityTests
 
     static async Task AssertAllValuesAndScanAsync(
         IPantsDatabase database,
-        (string Key, string Value)[] expected)
+        (string Key, string Value)[] expected
+    )
     {
         await using var reader = await BeginReadAsync(database);
+
         foreach (var (key, value) in expected)
         {
             Assert.Equal(value, TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
                 await reader.GetAsync(TestBytes.FromString(key)))));
         }
+
 
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
         var entries = await CollectAsync(scan);
@@ -437,10 +448,12 @@ public sealed class MidgeTransactionParityTests
     static async Task<List<PantsEntry>> CollectAsync(IPantsScan scan)
     {
         var entries = new List<PantsEntry>();
+
         await foreach (var entry in scan)
         {
             entries.Add(entry);
         }
+
 
         return entries;
     }

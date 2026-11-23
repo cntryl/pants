@@ -21,11 +21,13 @@ static class ScaleLadderReopenProbe
         long PeakRssBytes,
         long ConfiguredBudgetBytes,
         string Detail)> RunAsync(
-        string databasePath,
-        long recordCount,
-        long budgetBytes)
+            string databasePath,
+            long recordCount,
+            long budgetBytes
+        )
     {
         var resultsPath = Path.Combine(Path.GetTempPath(), $"pants-reopen-probe-{Guid.NewGuid():N}.txt");
+
         try
         {
             var start = ScaleLadderChildProcess.Create(
@@ -40,6 +42,7 @@ static class ScaleLadderReopenProbe
             await using var peakMonitor = new PeakWorkingSetMonitor(child);
             var standardError = child.StandardError.ReadToEndAsync();
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+
             try
             {
                 await child.WaitForExitAsync(timeout.Token);
@@ -52,6 +55,7 @@ static class ScaleLadderReopenProbe
                 return (false, peakMonitor.PeakBytes, 0, "Reopen probe child did not exit within 120 seconds.");
             }
 
+
             if (child.ExitCode != 0 || !File.Exists(resultsPath))
             {
                 await peakMonitor.StopAsync();
@@ -62,6 +66,7 @@ static class ScaleLadderReopenProbe
             var configuredBudgetBytes = long.Parse(
                 await File.ReadAllTextAsync(resultsPath),
                 CultureInfo.InvariantCulture);
+
             if (configuredBudgetBytes != budgetBytes)
             {
                 await peakMonitor.StopAsync();
@@ -72,6 +77,7 @@ static class ScaleLadderReopenProbe
                     $"Reopen probe used {configuredBudgetBytes} bytes instead of the requested " +
                     $"{budgetBytes}-byte tier budget.");
             }
+
 
             await peakMonitor.StopAsync();
             return (
@@ -90,7 +96,8 @@ static class ScaleLadderReopenProbe
         string databasePath,
         long recordCount,
         long budgetBytes,
-        string resultsPath)
+        string resultsPath
+    )
     {
         var options = PantsOpenOptions.Local(databasePath)
             .WithBackgroundCompaction(false)
@@ -99,11 +106,13 @@ static class ScaleLadderReopenProbe
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         foreach (var index in new[] { 0L, recordCount / 2, Math.Max(0, recordCount - 1) })
         {
             foreach (var mutation in ScaleLadderRunner.CreateMutationsForRecord(index))
             {
                 var value = await reader.GetAsync(mutation.Key);
+
                 if (value is null || !value.Value.Span.SequenceEqual(mutation.Value))
                 {
                     throw new InvalidOperationException(
@@ -111,6 +120,7 @@ static class ScaleLadderReopenProbe
                 }
             }
         }
+
 
         await File.WriteAllTextAsync(
             resultsPath,

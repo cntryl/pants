@@ -6,7 +6,8 @@ interface ICloudDdlAuthority
 
     ValueTask FenceDdlRegistryAsync(
         CloudDdlRegistry bootstrap,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask<CloudDdlRegistryObject?> ReadDdlRegistryAsync(
         CancellationToken cancellationToken);
@@ -15,5 +16,6 @@ interface ICloudDdlAuthority
         CloudDdlRegistry registry,
         string? expectedVersion,
         CancellationToken cancellationToken,
-        Action? beforeSubmission = null);
+        Action? beforeSubmission = null
+    );
 }

@@ -64,9 +64,11 @@ sealed class DeferredCompactionRaceFailpointHandler : IFailpointHandler, IDispos
     static void Block(
         TaskCompletionSource entered,
         ManualResetEventSlim release,
-        Failpoint failpoint)
+        Failpoint failpoint
+    )
     {
         entered.TrySetResult();
+
         if (!release.Wait(MaximumBlockTime))
         {
             throw new TimeoutException($"Timed out waiting to release {failpoint}.");

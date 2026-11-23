@@ -12,7 +12,8 @@ public sealed class PantsL0FailedFreezeAdmissionTests
     public async Task ShouldPreserveLastL0SlotAdmissionAndWalAcrossAutomaticFreezeFailure(
         bool crossFlushThreshold,
         bool failAutomaticFreeze,
-        bool startManualCompaction)
+        bool startManualCompaction
+    )
     {
         using var directory = new TemporaryDirectory();
         var options = PantsOpenOptions.Local(directory.Path)
@@ -47,27 +48,33 @@ public sealed class PantsL0FailedFreezeAdmissionTests
             var compaction = startManualCompaction
                 ? database.Maintenance.CompactAllAsync().AsTask()
                 : Task.CompletedTask;
+
             try
             {
                 if (startManualCompaction)
                 {
                     await held.WaitForCompactionAsync();
                 }
+
                 Assert.Equal(ceiling - 1, await CountL0FilesAsync(database));
+
                 if (failAutomaticFreeze)
                 {
                     held.FailNextAutomaticFreeze();
                 }
+
 
                 var firstValue = new byte[checked((int)(crossFlushThreshold
                     ? plan.MemtableFlushThresholdBytes
                     : plan.MemtableFlushThresholdBytes / 4))];
                 await PutAsync(database, "accepted", firstValue);
                 expected.Add("accepted", firstValue);
+
                 if (!startManualCompaction)
                 {
                     await held.WaitForCompactionAsync();
                 }
+
                 if (!failAutomaticFreeze)
                 {
                     await held.WaitForFlushAsync();
@@ -76,6 +83,7 @@ public sealed class PantsL0FailedFreezeAdmissionTests
                 var before = await database.Diagnostics.GetRuntimeMetricsAsync();
                 Assert.Equal(failAutomaticFreeze ? 1 : 0, held.AutomaticFreezeFailures);
                 Assert.Equal(failAutomaticFreeze ? 0 : 1, before.ImmutableMemtables);
+
                 if (failAutomaticFreeze)
                 {
                     Assert.True(crossFlushThreshold
@@ -88,8 +96,10 @@ public sealed class PantsL0FailedFreezeAdmissionTests
                     Assert.Equal(0, before.ActiveMemtableBytes);
                 }
 
+
                 var walBefore = ReadWalFiles(directory.Path);
                 var secondValue = "next-value"u8.ToArray();
+
                 if (crossFlushThreshold)
                 {
                     await Assert.ThrowsAsync<PantsWriteStallException>(() =>
@@ -101,10 +111,12 @@ public sealed class PantsL0FailedFreezeAdmissionTests
                     Assert.Equal(before.WalPendingWrites, after.WalPendingWrites);
                     var walAfter = ReadWalFiles(directory.Path);
                     Assert.Equal(walBefore.Keys, walAfter.Keys);
+
                     foreach (var (name, bytes) in walBefore)
                     {
                         Assert.Equal(bytes, walAfter[name]);
                     }
+
 
                     Assert.False(await database.Maintenance.WaitForWriteStallClearAsync(
                         database.ColumnFamilies.DefaultFamily, TimeSpan.Zero));
@@ -116,6 +128,7 @@ public sealed class PantsL0FailedFreezeAdmissionTests
                     Assert.True((await database.Diagnostics.GetRuntimeMetricsAsync()).CurrentSequence > before.CurrentSequence);
                 }
 
+
                 await AssertExactRowsAsync(database, expected);
             }
             finally
@@ -123,6 +136,7 @@ public sealed class PantsL0FailedFreezeAdmissionTests
                 held.Release();
                 await compaction.WaitAsync(TestTimeouts.Expected);
             }
+
 
             await TestWait.UntilAsync(async () => await CountL0FilesAsync(database) < ceiling - 1,
                 "pressure recovery publishes without ordinary background compaction");
@@ -158,12 +172,15 @@ public sealed class PantsL0FailedFreezeAdmissionTests
             database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
         var actual = new List<(string Key, byte[] Value)>();
+
         await foreach (var row in scan)
         {
             actual.Add((TestBytes.ToText(row.Key), row.Value.ToArray()));
         }
 
+
         Assert.Equal(expected.Keys, actual.Select(static row => row.Key));
+
         foreach (var (key, value) in actual)
         {
             Assert.Equal(expected[key], value);
@@ -203,12 +220,15 @@ public sealed class PantsL0FailedFreezeAdmissionTests
                 Failpoint.BeforeFlushPublication => _flush,
                 _ => null
             };
+
             if (entered is null)
             {
                 return;
             }
 
+
             entered.TrySetResult();
+
             if (!_release.Wait(TestTimeouts.Expected))
             {
                 throw new TimeoutException($"Timed out waiting to release {failpoint}.");

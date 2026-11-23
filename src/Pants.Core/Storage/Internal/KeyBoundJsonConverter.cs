@@ -27,6 +27,7 @@ sealed class KeyBoundJsonConverter : JsonConverter<byte[]>
 
         var buffer = new byte[InitialCapacity];
         var length = 0;
+
         while (reader.Read())
         {
             if (reader.TokenType == JsonTokenType.EndArray)
@@ -47,16 +48,19 @@ sealed class KeyBoundJsonConverter : JsonConverter<byte[]>
             buffer[length++] = value;
         }
 
+
         throw new ManifestKeyBoundFormatException("A manifest key bound array is not terminated.");
     }
 
     internal static void WriteBytes(Utf8JsonWriter writer, byte[] value)
     {
         writer.WriteStartArray();
+
         foreach (var item in value)
         {
             writer.WriteNumberValue(item);
         }
+
 
         writer.WriteEndArray();
     }

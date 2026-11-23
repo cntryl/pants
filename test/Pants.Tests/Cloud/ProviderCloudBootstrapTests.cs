@@ -27,10 +27,12 @@ public sealed class ProviderCloudBootstrapTests
 
         Assert.False(Directory.Exists(Path.Combine(cache.Path, "cloud_store")));
         Assert.Equal(before.Keys.Order(StringComparer.Ordinal), LocalAuthorityFiles(cache.Path));
+
         foreach (var (name, bytes) in before)
         {
             Assert.Equal(bytes, await File.ReadAllBytesAsync(Path.Combine(cache.Path, name)));
         }
+
         await AssertValueAsync(local);
     }
 
@@ -43,14 +45,17 @@ public sealed class ProviderCloudBootstrapTests
         {
             return;
         }
+
         using var directory = new TemporaryDirectory();
         var cachePath = Path.Combine(directory.Path, "cache");
+
         if (retargetAlias)
         {
             var originalPath = Path.Combine(directory.Path, "original");
             Directory.CreateDirectory(originalPath);
             Directory.CreateSymbolicLink(cachePath, originalPath);
         }
+
         using var backend = new InMemoryAzureBlobHandler();
         using var handler = new BootstrapHandler(cachePath, backend) { HoldFirstGenerationUpload = true };
         using var client = new HttpClient(handler);
@@ -58,9 +63,11 @@ public sealed class ProviderCloudBootstrapTests
             new RuntimeDependencies(cloudHttpClient: client)).AsTask();
         IPantsDatabase? original = null;
         IPantsDatabase? replacement = null;
+
         try
         {
             await handler.WaitForGenerationUploadAsync();
+
             if (retargetAlias)
             {
                 var replacementPath = Path.Combine(directory.Path, "replacement");
@@ -73,6 +80,7 @@ public sealed class ProviderCloudBootstrapTests
                 Directory.Move(cachePath, Path.Combine(directory.Path, "renamed"));
                 Directory.CreateDirectory(cachePath);
             }
+
             replacement = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(cachePath));
             await using (var write = await replacement.Transactions.BeginAsync(replacement.ColumnFamilies.DefaultFamily,
                              PantsTransactionMode.ReadWrite))
@@ -86,19 +94,23 @@ public sealed class ProviderCloudBootstrapTests
             var error = await Record.ExceptionAsync(async () => original = await opening.WaitAsync(TestTimeouts.Expected));
             Assert.IsType<PantsInvalidPathException>(error);
             Assert.Equal(before.Keys.Order(StringComparer.Ordinal), LocalAuthorityFiles(cachePath));
+
             foreach (var (name, bytes) in before)
             {
                 Assert.Equal(bytes, await File.ReadAllBytesAsync(Path.Combine(cachePath, name)));
             }
+
             await AssertValueAsync(replacement);
         }
         finally
         {
             handler.ReleaseGenerationUpload();
+
             if (original is not null)
             {
                 await original.DisposeAsync();
             }
+
             if (replacement is not null)
             {
                 await replacement.DisposeAsync();
@@ -118,6 +130,7 @@ public sealed class ProviderCloudBootstrapTests
         var dependencies = new RuntimeDependencies(cloudHttpClient: client);
         var opening = PantsDatabase.OpenForTestingAsync(CreateOptions(cache.Path), dependencies).AsTask();
         IPantsDatabase? contender = null;
+
         try
         {
             await handler.WaitForGenerationUploadAsync();
@@ -135,7 +148,9 @@ public sealed class ProviderCloudBootstrapTests
             {
                 await contender.DisposeAsync();
             }
+
             handler.ReleaseGenerationUpload();
+
             try
             {
                 await using var original = await opening.WaitAsync(TestTimeouts.Expected);
@@ -168,10 +183,12 @@ public sealed class ProviderCloudBootstrapTests
 
         Assert.Empty(backend.GetObjectPaths("/"));
         Assert.Equal(before.Keys.Order(StringComparer.Ordinal), LocalAuthorityFiles(cache.Path));
+
         foreach (var (name, bytes) in before)
         {
             Assert.Equal(bytes, await File.ReadAllBytesAsync(Path.Combine(cache.Path, name)));
         }
+
         await AssertValueAsync(local);
     }
 
@@ -251,6 +268,7 @@ public sealed class ProviderCloudBootstrapTests
             });
         var opening = PantsDatabase.OpenForTestingAsync(
             CreateOptions(cache.Path).WithOpenTimeout(TimeSpan.FromSeconds(1)), dependencies).AsTask();
+
         try
         {
             await handler.WaitForGenerationUploadAsync();
@@ -268,6 +286,7 @@ public sealed class ProviderCloudBootstrapTests
             handler.ReleaseGenerationUpload();
             await cleanup.Task.WaitAsync(TestTimeouts.Expected);
         }
+
 
         Assert.Empty(LocalAuthorityFiles(cache.Path));
         Assert.Equal(0UL, CloudMetadataAuthority.ReadGenerationOrdinal(backend.GetObjectBytes("/metadata/committed-pointer.v1")));
@@ -362,6 +381,7 @@ public sealed class ProviderCloudBootstrapTests
         var store = await CloudObjectStoreFactory.CreateAsync(CreateLocation(), TestTimeouts.Expected, client);
         string key;
         byte[] bytes;
+
         switch (history)
         {
             case "sst":
@@ -388,6 +408,7 @@ public sealed class ProviderCloudBootstrapTests
                     bytes, new PantsCloudObjectWriteCondition.IfAbsent()));
                 break;
         }
+
 
         Assert.True(await store.PutAsync(key, bytes, new PantsCloudObjectWriteCondition.IfAbsent()));
 
@@ -457,18 +478,21 @@ public sealed class ProviderCloudBootstrapTests
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var path = request.RequestUri!.AbsolutePath;
+
             if (request.Method == HttpMethod.Get &&
                 path.EndsWith("/" + PantsCloudObjectLayout.WalCatalogObjectKey, StringComparison.Ordinal) &&
                 request.Headers.Range is null && Volatile.Read(ref _generationUploads) == 0)
             {
                 Interlocked.Increment(ref _catalogFullReadsBeforeFirstGeneration);
             }
+
             if (request.Method == HttpMethod.Put && path.Contains("/metadata/generations/", StringComparison.Ordinal))
             {
                 if (Interlocked.Increment(ref _generationUploads) == 1)
                 {
                     LocalAuthorityAtFirstUpload = LocalAuthorityFiles(root);
                     _generationEntered.TrySetResult();
+
                     if (HoldFirstGenerationUpload)
                     {
                         await _generationRelease.Task.WaitAsync(TestTimeouts.Expected, CancellationToken.None);

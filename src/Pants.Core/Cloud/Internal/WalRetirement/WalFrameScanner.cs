@@ -21,10 +21,12 @@ static class WalFrameScanner
     public static int Acknowledge(
         WalSegmentProof proof,
         ReadOnlySpan<byte> window,
-        PublishedManifest manifest)
+        PublishedManifest manifest
+    )
     {
         var cursor = 0;
         var acknowledged = false;
+
         if (proof.Offset == 0)
         {
             if (window.Length < WalSegmentCodec.HeaderSize)
@@ -37,14 +39,17 @@ static class WalFrameScanner
             acknowledged = true;
         }
 
+
         while (proof.Remaining > 0)
         {
             var available = window.Length - cursor;
+
             if (proof.Remaining < HeaderBytes)
             {
                 throw new PantsCorruptionException(
                     $"Published cloud WAL object '{proof.Segment.ObjectKey}' has a torn frame header.");
             }
+
 
             if (available < HeaderBytes)
             {
@@ -53,6 +58,7 @@ static class WalFrameScanner
 
             var header = window.Slice(cursor, HeaderBytes);
             var payloadLength = BinaryPrimitives.ReadUInt32LittleEndian(header);
+
             if (payloadLength > DiskFormat.WalMaximumRecordBytes)
             {
                 throw new PantsCorruptionException(
@@ -60,12 +66,15 @@ static class WalFrameScanner
                     "64 MiB limit.");
             }
 
+
             var frameLength = HeaderBytes + (long)payloadLength;
+
             if (frameLength > proof.Remaining)
             {
                 throw new PantsCorruptionException(
                     $"Published cloud WAL object '{proof.Segment.ObjectKey}' has a torn frame payload.");
             }
+
 
             if (frameLength > available)
             {
@@ -74,11 +83,13 @@ static class WalFrameScanner
 
             var frame = window.Slice(cursor, checked((int)frameLength));
             var payload = frame[HeaderBytes..];
+
             if (DiskFormat.Crc32C(payload) != BinaryPrimitives.ReadUInt32LittleEndian(header[sizeof(uint)..]))
             {
                 throw new PantsCorruptionException(
                     $"Published cloud WAL object '{proof.Segment.ObjectKey}' has a frame checksum mismatch.");
             }
+
 
             if (WalSegmentCodec.IsFooter(payload))
             {
@@ -87,6 +98,7 @@ static class WalFrameScanner
             }
 
             WalRecord record;
+
             try
             {
                 record = WalCodec.DecodeRecord(payload, proof.Segment.WriterEpoch);
@@ -97,6 +109,7 @@ static class WalFrameScanner
                     "A published cloud WAL frame is malformed.",
                     exception);
             }
+
 
             if (!proof.TryAcknowledge(frame, record, manifest.Coverage))
             {

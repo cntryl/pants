@@ -45,11 +45,13 @@ public sealed class SimulatedCloudReadAuthorityTests
         await Assert.ThrowsAsync<PantsFencedException>(() => own.GetAsync("own"u8.ToArray()).AsTask());
         await Assert.ThrowsAsync<PantsFencedException>(() => retained.GetWithDiagnosticsAsync("a"u8.ToArray()).AsTask());
         await Assert.ThrowsAsync<PantsFencedException>(() => retained.ScanAsync(new PantsScanQuery()).AsTask());
+
         foreach (var iterator in new[] { first, second, none })
         {
             var failure = await Assert.ThrowsAsync<PantsFencedException>(() => iterator.MoveNextAsync().AsTask());
             Assert.Same(failure, await Assert.ThrowsAsync<PantsFencedException>(() => iterator.MoveNextAsync().AsTask()));
         }
+
 
         foreach (var mode in new[] { PantsTransactionMode.ReadOnly, PantsTransactionMode.ReadWrite })
         {

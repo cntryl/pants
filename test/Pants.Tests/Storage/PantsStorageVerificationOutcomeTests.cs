@@ -97,6 +97,7 @@ public sealed class PantsStorageVerificationOutcomeTests
         Directory.CreateDirectory(database);
         await WriteEmptyFixtureAsync(database);
         File.SetUnixFileMode(database, UnixFileMode.None);
+
         try
         {
             if (CanStillEnumerate(database))
@@ -132,10 +133,12 @@ public sealed class PantsStorageVerificationOutcomeTests
         await WriteEmptyFixtureAsync(directory.Path);
         var journal = Path.Combine(directory.Path, "manifest.journal");
         File.SetUnixFileMode(journal, UnixFileMode.None);
+
         if (CanStillRead(journal))
         {
             return; // Privileged users bypass permission bits; the condition cannot be produced.
         }
+
 
         var outcome = await PantsDatabase.VerifyPathOutcomeAsync(directory.Path);
 
@@ -194,7 +197,8 @@ public sealed class PantsStorageVerificationOutcomeTests
     [InlineData(PantsEngineHealth.Corrupt, PantsStorageVerificationOutcomeKind.Corruption)]
     public void ShouldClassifyReportByHealth(
         PantsEngineHealth health,
-        PantsStorageVerificationOutcomeKind expected)
+        PantsStorageVerificationOutcomeKind expected
+    )
     {
         var report = new PantsStorageVerificationReport(
             0, 0, 0, 0, 0, null, 0, 0, 0, true, health, []);

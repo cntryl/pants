@@ -26,10 +26,12 @@ public class EventLoopSubsystemBenchmarks : Tier2Benchmark
             channel.Writer.Complete();
         });
         long sum = 0;
+
         await foreach (var value in channel.Reader.ReadAllAsync())
         {
             sum += value;
         }
+
 
         await producer;
         return sum;

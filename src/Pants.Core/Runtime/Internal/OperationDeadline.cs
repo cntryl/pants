@@ -13,7 +13,8 @@ readonly struct OperationDeadline
         long started,
         TimeSpan budget,
         TimeProvider timeProvider,
-        bool bounded)
+        bool bounded
+    )
     {
         _started = started;
         _budget = budget;
@@ -29,7 +30,8 @@ readonly struct OperationDeadline
 
     public static OperationDeadline FromBudget(
         TimeSpan budget,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null
+    )
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(budget, TimeSpan.Zero);
 
@@ -40,7 +42,8 @@ readonly struct OperationDeadline
     public static OperationDeadline FromStart(
         long started,
         TimeSpan budget,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null
+    )
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(budget, TimeSpan.Zero);
 
@@ -82,36 +85,43 @@ readonly struct OperationDeadline
 
     public ValueTask RunAsync(
         Func<CancellationToken, ValueTask> operation,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         RunCoreAsync(operation, false, cancellationToken);
 
     public ValueTask RunMutationAsync(
         Func<CancellationToken, ValueTask> operation,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         RunCoreAsync(operation, true, cancellationToken);
 
     public ValueTask<T> RunAsync<T>(
         Func<CancellationToken, ValueTask<T>> operation,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         RunCoreAsync(operation, false, cancellationToken);
 
     public ValueTask<T> RunMutationAsync<T>(
         Func<CancellationToken, ValueTask<T>> operation,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         RunCoreAsync(operation, true, cancellationToken);
 
     async ValueTask RunCoreAsync(
         Func<CancellationToken, ValueTask> operation,
         bool mutation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(operation);
         cancellationToken.ThrowIfCancellationRequested();
+
         if (!IsBounded)
         {
             await operation(cancellationToken).ConfigureAwait(false);
             return;
         }
+
 
         var remaining = Remaining;
         ThrowIfExpired(remaining);
@@ -119,6 +129,7 @@ readonly struct OperationDeadline
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             timeout.Token);
+
         try
         {
             await operation(linked.Token).ConfigureAwait(false);
@@ -133,14 +144,17 @@ readonly struct OperationDeadline
     async ValueTask<T> RunCoreAsync<T>(
         Func<CancellationToken, ValueTask<T>> operation,
         bool mutation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(operation);
         cancellationToken.ThrowIfCancellationRequested();
+
         if (!IsBounded)
         {
             return await operation(cancellationToken).ConfigureAwait(false);
         }
+
 
         var remaining = Remaining;
         ThrowIfExpired(remaining);
@@ -148,6 +162,7 @@ readonly struct OperationDeadline
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             timeout.Token);
+
         try
         {
             return await operation(linked.Token).ConfigureAwait(false);

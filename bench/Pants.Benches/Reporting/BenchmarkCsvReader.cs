@@ -11,17 +11,20 @@ static class BenchmarkCsvReader
     public static IReadOnlyList<BenchmarkResult> Read(
         string csv,
         string benchmarkType,
-        IReadOnlyDictionary<string, int> operationsPerMethod)
+        IReadOnlyDictionary<string, int> operationsPerMethod
+    )
     {
         var tier = TierFromType(benchmarkType);
         var results = CsvTable.Parse(csv).Select(row => ReadRow(row, benchmarkType, tier, operationsPerMethod))
             .ToArray();
         var duplicate = results.GroupBy(result => result.ScenarioId, StringComparer.Ordinal)
             .FirstOrDefault(group => group.Count() > 1);
+
         if (duplicate is not null)
         {
             throw new InvalidDataException($"Duplicate benchmark scenario '{duplicate.Key}'.");
         }
+
 
         return results;
     }
@@ -30,15 +33,18 @@ static class BenchmarkCsvReader
         IReadOnlyDictionary<string, string> row,
         string benchmarkType,
         string tier,
-        IReadOnlyDictionary<string, int> operationsPerMethod)
+        IReadOnlyDictionary<string, int> operationsPerMethod
+    )
     {
         var method = Required(row, "Method");
         var mean = Required(row, "Mean");
         var allocated = Required(row, "Allocated");
+
         if (!operationsPerMethod.TryGetValue(method, out var operations) || operations <= 0)
         {
             throw new InvalidDataException($"Missing logical operation count for '{method}'.");
         }
+
 
         var parameters = row
             .Where(pair => !InfrastructureColumns.Contains(pair.Key) && !IsJobCharacteristic(pair.Key))

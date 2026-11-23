@@ -13,13 +13,16 @@ static class CompactionMoves
         {
             return false;
         }
+
         foreach (var file in plan.Inputs)
         {
             if (!file.HasTrustedKeyBounds())
             {
                 return false;
             }
+
             ulong bytes = 0;
+
             foreach (var grandparent in manifest.Files.Where(other =>
                          other.ColumnFamilyId == plan.ColumnFamilyId && other.Level == plan.TargetLevel + 1 &&
                          (!other.HasTrustedKeyBounds() ||
@@ -30,9 +33,11 @@ static class CompactionMoves
                 {
                     return false;
                 }
+
                 bytes += grandparent.SizeBytes;
             }
         }
+
         try
         {
             _ = ManifestTransitions.ValidateMove(

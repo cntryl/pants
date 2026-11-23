@@ -21,10 +21,12 @@ sealed class RuntimeWorker : IAsyncDisposable, IRuntimeServiceMetrics
     public RuntimeWorker(int capacity, TimeSpan? disposalTimeout = null)
     {
         _disposalTimeout = disposalTimeout ?? DefaultDisposalTimeout;
+
         if (_disposalTimeout <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(disposalTimeout));
         }
+
 
         _commands = Channel.CreateBounded<RuntimeWorkerCommand>(new BoundedChannelOptions(capacity)
         {
@@ -50,6 +52,7 @@ sealed class RuntimeWorker : IAsyncDisposable, IRuntimeServiceMetrics
 
         _commands.Writer.TryComplete();
         await _lifetimeCancellation.CancelAsync().ConfigureAwait(false);
+
         try
         {
             await _loopTask.WaitAsync(_disposalTimeout).ConfigureAwait(false);
@@ -83,7 +86,8 @@ sealed class RuntimeWorker : IAsyncDisposable, IRuntimeServiceMetrics
 
     public async ValueTask ExecuteAsync(
         Func<CancellationToken, ValueTask> operation,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         var command = await EnqueueCoreAsync(
                 operation,
@@ -95,12 +99,14 @@ sealed class RuntimeWorker : IAsyncDisposable, IRuntimeServiceMetrics
 
     public async ValueTask EnqueueAsync(
         Func<CancellationToken, ValueTask> operation,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default
+    ) =>
         _ = await ScheduleAsync(operation, cancellationToken).ConfigureAwait(false);
 
     public async ValueTask<Task> ScheduleAsync(
         Func<CancellationToken, ValueTask> operation,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         var command = await EnqueueCoreAsync(
                 operation,
@@ -125,7 +131,8 @@ sealed class RuntimeWorker : IAsyncDisposable, IRuntimeServiceMetrics
     async ValueTask<RuntimeWorkerCommand> EnqueueCoreAsync(
         Func<CancellationToken, ValueTask> operation,
         CancellationToken admissionCancellationToken,
-        CancellationToken executionCancellationToken)
+        CancellationToken executionCancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(operation);
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
@@ -134,6 +141,7 @@ sealed class RuntimeWorker : IAsyncDisposable, IRuntimeServiceMetrics
         var admitted = false;
         Interlocked.Increment(ref _outstanding);
         Interlocked.Increment(ref _queueDepth);
+
         try
         {
             await _commands.Writer.WriteAsync(command, admissionCancellationToken)
@@ -174,9 +182,11 @@ sealed class RuntimeWorker : IAsyncDisposable, IRuntimeServiceMetrics
         {
             Interlocked.Decrement(ref _queueDepth);
             Interlocked.Increment(ref _inFlight);
+
             try
             {
                 await command.ExecuteAsync(_lifetimeCancellation.Token).ConfigureAwait(false);
+
                 if (command.Task.IsFaulted || command.Task.IsCanceled)
                 {
                     Interlocked.Increment(ref _failures);

@@ -131,6 +131,7 @@ public sealed class MidgeQueryBoundaryBehaviorTests
             }
         });
         var writers = new List<IPantsTransaction>();
+
         try
         {
             for (var index = 0; index < 5; index++)
@@ -151,6 +152,7 @@ public sealed class MidgeQueryBoundaryBehaviorTests
                 await writer.DisposeAsync();
             }
         }
+
 
         var expected = Enumerable.Range(50, 50).Select(Row).ToArray();
         await AssertPointsAsync(database, expected, 100);
@@ -182,16 +184,20 @@ public sealed class MidgeQueryBoundaryBehaviorTests
             {
                 Direction = index % 2 == 0 ? PantsScanDirection.Forward : PantsScanDirection.Reverse
             });
+
             if (Interlocked.Increment(ref admitted) == 4)
             {
                 ready.TrySetResult();
             }
+
             await ready.Task.WaitAsync(TestTimeouts.Expected);
             var rows = new List<(string Key, string Value)>();
+
             await foreach (var entry in scan)
             {
                 rows.Add((TestBytes.ToText(entry.Key), TestBytes.ToText(entry.Value)));
             }
+
             var expected = Enumerable.Range(0, 1000).Select(Row);
             Assert.Equal(index % 2 == 0 ? expected : expected.Reverse(), rows);
         });
@@ -234,6 +240,7 @@ public sealed class MidgeQueryBoundaryBehaviorTests
             .WithBackgroundCompaction(false);
         await using var database = await PantsDatabase.OpenAsync(options);
         var expected = new SortedDictionary<string, string>(StringComparer.Ordinal);
+
         for (var generation = 0; generation < 4; generation++)
         {
             var start = generation == 0 ? 0 : generation == 1 ? 5 : generation == 2 ? 15 : 20;
@@ -247,13 +254,16 @@ public sealed class MidgeQueryBoundaryBehaviorTests
                     writer.Put(Key(index), TestBytes.FromString(value));
                     expected[$"key-{index:0000}"] = value;
                 }
+
                 await writer.CommitAsync(StorageModeTestHarness.GetWriteOptions(mode));
             }
+
             if (generation < 3)
             {
                 await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             }
         }
+
         Assert.Equal(3, (await database.Diagnostics.GetStorageLayoutAsync()).Levels.Sum(level => level.FileCount));
         var original = expected.Select(pair => (Key: pair.Key, Value: pair.Value)).ToArray();
         Assert.Equal(original, await ScanAsync(database, new PantsScanQuery()));
@@ -270,10 +280,12 @@ public sealed class MidgeQueryBoundaryBehaviorTests
             writer.Put(Key(10), "compacted-latest"u8.ToArray());
         });
         expected.Remove("key-0000");
+
         for (var index = 2; index < 5; index++)
         {
             expected.Remove($"key-{index:0000}");
         }
+
         expected["key-0010"] = "compacted-latest";
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         var inputNames = (await database.Diagnostics.GetStorageLayoutAsync()).Levels
@@ -291,10 +303,12 @@ public sealed class MidgeQueryBoundaryBehaviorTests
         }));
         await using var oldScan = await pinned.ScanAsync(new PantsScanQuery());
         var retained = new List<(string Key, string Value)>();
+
         await foreach (var entry in oldScan)
         {
             retained.Add((TestBytes.ToText(entry.Key), TestBytes.ToText(entry.Value)));
         }
+
         Assert.Equal(original, retained);
     }
 
@@ -317,6 +331,7 @@ public sealed class MidgeQueryBoundaryBehaviorTests
         var values = expected.ToDictionary(row => row.Key, row => row.Value, StringComparer.Ordinal);
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < count; index++)
         {
             var value = await reader.GetAsync(Key(index));
@@ -330,10 +345,12 @@ public sealed class MidgeQueryBoundaryBehaviorTests
             database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
         await using var scan = await reader.ScanAsync(query);
         var rows = new List<(string Key, string Value)>();
+
         await foreach (var entry in scan)
         {
             rows.Add((TestBytes.ToText(entry.Key), TestBytes.ToText(entry.Value)));
         }
+
         return rows.ToArray();
     }
 }

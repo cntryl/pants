@@ -84,20 +84,24 @@ public sealed class PantsCheckpointAccountingParityTests
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < RowCount; index++)
         {
             var value = await transaction.GetAsync(RowKeyBytes(index));
             Assert.Equal(RowValue(index), value?.ToArray());
         }
 
+
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
         var count = 0;
+
         await foreach (var row in scan)
         {
             Assert.Equal(RowKeyBytes(count), row.Key.ToArray());
             Assert.Equal(RowValue(count), row.Value.ToArray());
             count++;
         }
+
 
         Assert.Equal(RowCount, count);
     }

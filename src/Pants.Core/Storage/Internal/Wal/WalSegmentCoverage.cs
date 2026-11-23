@@ -13,7 +13,8 @@ static class WalSegmentCoverage
         ReadOnlySpan<byte> segmentBytes,
         IReadOnlyDictionary<uint, ulong> flushedThrough,
         IReadOnlySet<uint> activeFamilyIds,
-        string scratchDirectory)
+        string scratchDirectory
+    )
     {
         ArgumentNullException.ThrowIfNull(flushedThrough);
         ArgumentNullException.ThrowIfNull(activeFamilyIds);
@@ -59,10 +60,12 @@ static class WalSegmentCoverage
     {
         ArgumentNullException.ThrowIfNull(orderedSegments);
         var prefixLength = 0;
+
         while (prefixLength < orderedSegments.Count && orderedSegments[prefixLength].Covered)
         {
             prefixLength++;
         }
+
 
         for (var candidate = 0; candidate < prefixLength; candidate++)
         {

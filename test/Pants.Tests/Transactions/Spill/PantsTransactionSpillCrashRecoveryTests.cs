@@ -23,10 +23,12 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
     public async Task ShouldAbortInChildProcessWhenSpilledTransactionCommitIsInterrupted()
     {
         var scenario = Environment.GetEnvironmentVariable(ChildScenarioEnvironmentVariable);
+
         if (!StringComparer.Ordinal.Equals(scenario, BeforeCommitMarkerScenario))
         {
             return;
         }
+
 
         var databasePath = Assert.IsType<string>(
             Environment.GetEnvironmentVariable(DatabasePathEnvironmentVariable));
@@ -65,10 +67,12 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
             "BeforeSpilledTransactionCommitMarker");
         using var directory = new TemporaryDirectory();
         var sentinelPath = GetTriggerSentinelPath(directory.Path);
+
         if (File.Exists(sentinelPath))
         {
             File.Delete(sentinelPath);
         }
+
 
         using var child = await StartReadyCrashChildAsync(directory.Path, sentinelPath);
         await TerminateCrashChildAsync(child.Process, directory.Path);
@@ -104,20 +108,24 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
         await using var reader = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 12; index++)
         {
             Assert.Null(await reader.GetAsync(TestBytes.FromString($"crash-{index:000}")));
         }
+
 
         await using var scan = await reader.ScanAsync(new PantsScanQuery
         {
             Prefix = "crash-"u8.ToArray()
         });
         var scannedRows = 0;
+
         await foreach (var _ in scan)
         {
             scannedRows++;
         }
+
 
         Assert.Equal(0, scannedRows);
         Assert.Empty(TransactionSpillHardeningTestHarness.FindArtifacts(directory.Path));
@@ -147,7 +155,8 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
         Process child,
         string sentinelPath,
         string standardOutput,
-        string standardError)
+        string standardError
+    )
     {
         var output = $"{standardOutput}\n{standardError}";
         Assert.NotEqual(0, child.ExitCode);
@@ -192,6 +201,7 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
         }
 
         using var exitTimeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         try
         {
             await child.WaitForExitAsync(exitTimeout.Token);
@@ -212,6 +222,7 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
         }
 
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         try
         {
             await child.WaitForExitAsync(timeout.Token);
@@ -227,12 +238,15 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
     static async Task WaitForCrashChildLockReleaseAsync(string databasePath)
     {
         var lockPath = Path.Combine(databasePath, "LOCK");
+
         if (!File.Exists(lockPath))
         {
             return;
         }
 
+
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         try
         {
             while (true)
@@ -295,6 +309,7 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
         var leasePath = Path.Combine(databasePath, ".midge_leader");
         var lines = await File.ReadAllLinesAsync(leasePath);
         var updated = false;
+
         for (var index = 0; index < lines.Length; index++)
         {
             if (!lines[index].StartsWith("acquired_at: ", StringComparison.Ordinal))
@@ -306,12 +321,14 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
             updated = true;
         }
 
+
         Assert.True(updated, "The crashed process lease must contain an acquisition timestamp.");
         // The edit invalidates the record checksum, so the expired copy carries none.
         await File.WriteAllLinesAsync(
             leasePath,
             lines.Where(static line => !line.StartsWith("checksum: ", StringComparison.Ordinal)));
         var acquisitionLockPath = Path.Combine(databasePath, ".midge_leader.lock");
+
         if (File.Exists(acquisitionLockPath))
         {
             File.Delete(acquisitionLockPath);

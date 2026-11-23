@@ -20,19 +20,23 @@ sealed class TransactionIntentReadView : IDisposable
         TransactionSpillStore? store,
         IReadOnlyList<TransactionSpillRun> runs,
         IReadOnlyList<TransactionIntentOperation> residentOperations,
-        TransactionMemoryPool memoryPool)
+        TransactionMemoryPool memoryPool
+    )
     {
         ArgumentNullException.ThrowIfNull(runs);
         ArgumentNullException.ThrowIfNull(residentOperations);
         _memoryPool = memoryPool ?? throw new ArgumentNullException(nameof(memoryPool));
         _reservedBytes = SnapshotBytes(residentOperations.Count, runs.Count);
+
         if (_reservedBytes != 0 && !_memoryPool.TryReserve(_reservedBytes))
         {
             throw PantsException.ResourceLimit(
                 "The transaction memory pool cannot admit a transaction read snapshot.");
         }
 
+
         _store = store;
+
         try
         {
             _runs = runs.ToArray();
@@ -73,10 +77,12 @@ sealed class TransactionIntentReadView : IDisposable
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         TransactionIntentLookup? latest = null;
         _store?.LookupLatest(_runs, key, ref latest);
+
         foreach (var operation in _residentOperations)
         {
             TransactionIntentLookup.Consider(ref latest, operation, key);
         }
+
 
         return latest;
     }
@@ -84,11 +90,13 @@ sealed class TransactionIntentReadView : IDisposable
     public IEnumerator<byte[]> CreateKeyScan(
         byte[]? startInclusive,
         byte[]? endExclusive,
-        PantsScanDirection direction)
+        PantsScanDirection direction
+    )
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 
         List<IEnumerator<byte[]>>? sources = null;
+
         try
         {
             sources = [new TransactionIntentResidentKeyCursor(
@@ -96,6 +104,7 @@ sealed class TransactionIntentReadView : IDisposable
                 startInclusive,
                 endExclusive,
                 direction)];
+
             if (_store is not null)
             {
                 foreach (var run in _runs)
@@ -108,6 +117,7 @@ sealed class TransactionIntentReadView : IDisposable
                         _memoryPool));
                 }
             }
+
 
             return new TransactionIntentKeyScan(
                 sources,
@@ -124,6 +134,7 @@ sealed class TransactionIntentReadView : IDisposable
                     source.Dispose();
                 }
             }
+
             throw;
         }
     }

@@ -22,13 +22,16 @@ sealed class ProviderWalCatalogReadAdmission(ResourceBudget budget, MaintenanceM
         CloudObjectMetadata? primary,
         CloudObjectMetadata? mirror,
         CancellationToken cancellationToken,
-        bool waitForMaintenanceGate = true)
+        bool waitForMaintenanceGate = true
+    )
     {
         var bytes = WorkspaceBytes(primary?.SizeBytes ?? 0, mirror?.SizeBytes ?? 0);
+
         if (bytes == 0)
         {
             return null;
         }
+
 
         if (bytes > budget.Limit)
         {
@@ -50,6 +53,7 @@ sealed class ProviderWalCatalogReadAdmission(ResourceBudget budget, MaintenanceM
         }
 
         var hold = await gate.EnterAsync(cancellationToken).ConfigureAwait(false);
+
         try
         {
             return new ProviderWalCatalogReadLease(budget.Reserve(bytes), hold);

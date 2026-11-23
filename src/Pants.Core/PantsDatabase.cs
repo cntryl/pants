@@ -7,7 +7,8 @@ public static class PantsDatabase
 {
     public static async ValueTask<IPantsDatabase> OpenAsync(
         PantsOpenOptions options,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentNullException.ThrowIfNull(options);
         cancellationToken.ThrowIfCancellationRequested();
@@ -22,7 +23,8 @@ public static class PantsDatabase
     internal static async ValueTask<IPantsDatabase> OpenForTestingAsync(
         PantsOpenOptions options,
         RuntimeDependencies dependencies,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(dependencies);
@@ -44,7 +46,8 @@ public static class PantsDatabase
     public static ValueTask<bool> RecoverStaleLeaseMutationLockAsync(
         string path,
         PantsLeaseConfiguration? leaseConfiguration = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentNullException.ThrowIfNull(path);
         cancellationToken.ThrowIfCancellationRequested();
@@ -59,13 +62,15 @@ public static class PantsDatabase
 
     public static ValueTask<PantsStorageVerificationReport> VerifyPathAsync(
         string path,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default
+    ) =>
         StorageVerifier.VerifyPathAsync(path, cancellationToken);
 
     public static ValueTask<PantsBackupManifest> RestoreBackupAsync(
         string artifact,
         PantsOpenOptions options,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default
+    ) =>
         BackupArtifactStore.RestoreAsync(
             artifact,
             options,
@@ -76,7 +81,8 @@ public static class PantsDatabase
         string artifact,
         PantsOpenOptions options,
         IFailpointHandler failpoints,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default
+    ) =>
         BackupArtifactStore.RestoreAsync(artifact, options, failpoints, cancellationToken);
 
     /// <summary>
@@ -87,6 +93,7 @@ public static class PantsDatabase
     /// </summary>
     public static ValueTask<PantsStorageVerificationOutcome> VerifyPathOutcomeAsync(
         string path,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default
+    ) =>
         StorageVerificationOutcomeResolver.VerifyPathAsync(path, cancellationToken);
 }

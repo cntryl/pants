@@ -16,10 +16,12 @@ public class MemtableBenchmarks : Tier1Benchmark
     public void Setup()
     {
         var builder = ImmutableSortedDictionary.CreateBuilder<byte[], CellState>(ByteArrayComparer.Instance);
+
         for (var index = 0; index < 1_000; index++)
         {
             builder.Add(BenchmarkData.Key(index), new CellState(_value, (ulong)index, null));
         }
+
 
         _memtable = builder.ToImmutable();
         _putKey = BenchmarkData.Key(10_000);
@@ -38,10 +40,12 @@ public class MemtableBenchmarks : Tier1Benchmark
     public int Iterate100()
     {
         var count = 0;
+
         foreach (var _ in _memtable.Take(100))
         {
             count++;
         }
+
 
         return count;
     }

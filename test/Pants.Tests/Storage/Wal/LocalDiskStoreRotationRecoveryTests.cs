@@ -352,6 +352,7 @@ public sealed class LocalDiskStoreRotationRecoveryTests
             new RuntimeTelemetry());
         using var store = LocalDiskStore.Open(directory.Path, state);
         var createdSegments = new List<SealedWalSegment>();
+
         for (var index = 0; index < 4; index++)
         {
             _ = store.AppendCommit(
@@ -366,6 +367,7 @@ public sealed class LocalDiskStoreRotationRecoveryTests
             store.CompleteCloudWalSeal(segment);
             createdSegments.Add(segment);
         }
+
 
         var countBounded = store.GetSealedWalSegmentsForCloudPublication(
             maximumSegments: 2,
@@ -506,7 +508,8 @@ public sealed class LocalDiskStoreRotationRecoveryTests
         RuntimeState state,
         byte[] key,
         byte[] value,
-        ulong transactionId = 1)
+        ulong transactionId = 1
+    )
     {
         var operation = new TransactionIntentOperation(
             0,

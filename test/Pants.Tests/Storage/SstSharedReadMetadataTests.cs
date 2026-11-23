@@ -123,10 +123,12 @@ public sealed class SstSharedReadMetadataTests
         using var occupied = budget.Reserve(budget.Limit - budget.Current);
 
         var keys = new List<string>();
+
         while (await scan.MoveNextAsync(CancellationToken.None))
         {
             keys.Add(TestBytes.ToText(scan.Current.Key));
         }
+
 
         Assert.Equal(["key-0000", "key-0001", "key-0002", "key-0003"], keys);
         Assert.Equal(budget.Limit, budget.Current);
@@ -234,10 +236,12 @@ public sealed class SstSharedReadMetadataTests
         public async ValueTask<byte[]> ReadExactlyAsync(long offset, int length, CancellationToken cancellationToken)
         {
             Reads++;
+
             if (beforeRead is not null)
             {
                 await beforeRead(cancellationToken);
             }
+
             return await inner.ReadExactlyAsync(offset, length, cancellationToken);
         }
         public async ValueTask DisposeAsync()
@@ -246,6 +250,7 @@ public sealed class SstSharedReadMetadataTests
             {
                 throw new IOException("Physical close not confirmed.");
             }
+
             await inner.DisposeAsync();
             Closed = true;
         }

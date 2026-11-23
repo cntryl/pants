@@ -15,6 +15,7 @@ static class StoragePathPreflight
         }
 
         string root;
+
         try
         {
             root = Path.GetFullPath(path);
@@ -24,6 +25,7 @@ static class StoragePathPreflight
         {
             return Fail(PantsStoragePathFailure.Invalid, $"The storage path is invalid: {exception.Message}");
         }
+
 
         if (File.Exists(root))
         {
@@ -54,6 +56,7 @@ static class StoragePathPreflight
             Path.Combine(root, "manifest.journal"),
             Path.Combine(root, "intent_log.json")
         ];
+
         foreach (var storageFile in storageFiles)
         {
             if (CheckReadable(storageFile) is { } failure)
@@ -61,6 +64,7 @@ static class StoragePathPreflight
                 return failure;
             }
         }
+
 
         return null;
     }

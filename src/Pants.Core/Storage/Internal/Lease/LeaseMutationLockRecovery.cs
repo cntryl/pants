@@ -28,17 +28,21 @@ static class LeaseMutationLockRecovery
         root = StoragePathGuard.CanonicalizeRoot(root);
         using var rootTrust = StoragePathGuard.TrustRoot(root);
         var lockPath = Path.Combine(root, LockFileName);
+
         if (!File.Exists(lockPath))
         {
             return false;
         }
 
+
         var ownerToken = ReadOwnerTokenOrRefuse(lockPath);
+
         if (!File.Exists(lockPath))
         {
             throw new PantsLeaseHeldException(
                 "The Midge leader mutation lock changed during recovery; no lock was removed.");
         }
+
 
         RequireNoLiveWriter(Path.Combine(root, LeaderFileName), timeToLive, clockSkewTolerance, clock);
 
@@ -78,16 +82,20 @@ static class LeaseMutationLockRecovery
     {
         StoragePathGuard.EnsureNotLink(leaderPath);
         var bytes = SharedReadFile.TryReadAllBytes(leaderPath);
+
         if (bytes is null)
         {
             return;
         }
 
+
         var record = LeaderRecordCodec.Decode(bytes);
+
         if (record is null)
         {
             return;
         }
+
 
         if (!Rfc3339Timestamp.TryParse(record.AcquiredAt, out var acquiredAt))
         {
@@ -96,6 +104,7 @@ static class LeaseMutationLockRecovery
         }
 
         var age = clock.UtcNow - acquiredAt;
+
         if (age < TimeSpan.Zero)
         {
             throw new PantsLeaseIndeterminateException(
@@ -103,6 +112,7 @@ static class LeaseMutationLockRecovery
         }
 
         // Same takeover boundary as FileLease: a record is stale once its age reaches TTL + skew.
+
         if (age < timeToLive + clockSkewTolerance)
         {
             throw new PantsLeaseHeldException(

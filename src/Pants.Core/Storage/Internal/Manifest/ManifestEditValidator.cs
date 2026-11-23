@@ -18,10 +18,12 @@ static class ManifestEditValidator
         if (edit.Variant == "Batch")
         {
             var nested = GetBatchEdits(edit, options);
+
             foreach (var nestedEdit in nested)
             {
                 ValidateEdit(nestedEdit, options, true);
             }
+
 
             if (!insideBatch)
             {
@@ -65,19 +67,23 @@ static class ManifestEditValidator
         var value = edit.Value is JsonElement element
             ? element
             : edit.ToElement(options).GetProperty("Batch");
+
         if (value.ValueKind != JsonValueKind.Array)
         {
             throw PantsException.Create(PantsErrorCode.InvalidArgument, "A manifest batch must be an array.");
         }
+
 
         return value.EnumerateArray().Select(ManifestEdit.FromElement).ToList();
     }
 
     static void ValidateFlushFrontierPairs(
         IReadOnlyList<ManifestEdit> edits,
-        JsonSerializerOptions options)
+        JsonSerializerOptions options
+    )
     {
         var flattened = new List<ManifestEdit>();
+
         foreach (var edit in edits)
         {
             if (edit.Variant == "Batch")
@@ -90,24 +96,30 @@ static class ManifestEditValidator
             }
         }
 
+
         var advancedFamilies = new HashSet<uint>();
+
         for (var index = 0; index < flattened.Count; index++)
         {
             var frontierEdit = flattened[index];
+
             if (frontierEdit.Variant != "AdvanceFlushFrontier")
             {
                 continue;
             }
 
+
             var frontier = GetValue(frontierEdit, options);
             var familyId = GetRequiredUInt32(frontier, "cf_id");
             var throughSequence = GetRequiredUInt64(frontier, "freeze_sequence");
+
             if (!advancedFamilies.Add(familyId))
             {
                 throw PantsException.Create(
                     PantsErrorCode.InvalidArgument,
                     $"A manifest batch advances family {familyId}'s flush frontier more than once.");
             }
+
 
             var pairedOutputExists = flattened.Take(index)
                 .Where(static edit => edit.Variant == "AddSst")
@@ -122,6 +134,7 @@ static class ManifestEditValidator
                               value.TryGetProperty("name", out var name) &&
                               name.ValueKind == JsonValueKind.String &&
                               flattened.Take(index).Where(static candidate => candidate.Variant == "AddSst").Select(candidate => GetSst(candidate, options)).Any(file => file.Name == name.GetString() && file.ColumnFamilyId == familyId));
+
             if (!pairedOutputExists || outputIsRemoved)
             {
                 throw PantsException.Create(

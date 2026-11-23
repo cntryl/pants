@@ -7,12 +7,14 @@ static class WalTestFiles
         var ledger = WalLedgerStore.LoadExisting(Path.Combine(root, "wal"));
         using var stream = new MemoryStream();
         stream.Write(WalSegmentCodec.EncodeHeader(ledger.Active.Open, ledger.Holder));
+
         foreach (var payload in payloads)
         {
             DiskFormat.WriteUInt32(stream, checked((uint)payload.Length));
             DiskFormat.WriteUInt32(stream, DiskFormat.Crc32C(payload));
             stream.Write(payload);
         }
+
 
         File.WriteAllBytes(ledger.ActivePath, stream.ToArray());
         ledger.SyncOpen(checked((ulong)stream.Length));

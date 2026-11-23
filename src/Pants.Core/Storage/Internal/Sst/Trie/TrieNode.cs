@@ -19,6 +19,7 @@ sealed class TrieNode(
             edge,
             Comparer<TrieEdge>.Create(static (left, right) =>
                 left.FirstByte.CompareTo(right.FirstByte)));
+
         if (index >= 0)
         {
             Children[index] = edge;
@@ -35,11 +36,13 @@ sealed class TrieNode(
             new TrieEdge(firstByte, 0),
             Comparer<TrieEdge>.Create(static (left, right) =>
                 left.FirstByte.CompareTo(right.FirstByte)));
+
         if (index >= 0)
         {
             edge = Children[index];
             return true;
         }
+
 
         edge = default;
         return false;

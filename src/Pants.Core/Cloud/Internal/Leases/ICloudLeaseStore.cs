@@ -6,10 +6,12 @@ interface ICloudLeaseStore
 
     ValueTask<bool> TryCreateAsync(
         CloudLeaseRecord lease,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask<bool> TryReplaceAsync(
         string expectedVersion,
         CloudLeaseRecord lease,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }

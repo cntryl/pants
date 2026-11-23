@@ -97,7 +97,8 @@ public sealed class CompactionMergerTests
         string key,
         string? value,
         ulong sequence,
-        bool isDelete = false) => new(
+        bool isDelete = false
+    ) => new(
         TestBytes.FromString(key),
         value is null ? null : TestBytes.FromString(value),
         sequence,

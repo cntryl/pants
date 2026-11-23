@@ -20,7 +20,8 @@ sealed class AsyncSstReader : IAsyncDisposable
         IReadOnlyList<RangeTombstone> rangeTombstones,
         byte[]? smallestKey,
         byte[]? largestKey,
-        SharedSource? shared = null)
+        SharedSource? shared = null
+    )
     {
         _shared = shared ?? new SharedSource(source);
         _source = source;
@@ -71,10 +72,12 @@ sealed class AsyncSstReader : IAsyncDisposable
             const int perIndexEntryOverhead = 56;
             long bytes = fixedOverhead + (_blockBlooms?.Length ?? 0) +
                          (SmallestKey?.Length ?? 0) + (LargestKey?.Length ?? 0);
+
             foreach (var (firstKey, _) in _index)
             {
                 bytes += firstKey.Length + perIndexEntryOverhead;
             }
+
 
             if (_trieIndex is not null)
             {
@@ -102,10 +105,12 @@ sealed class AsyncSstReader : IAsyncDisposable
             const int fixedOverhead = 128;
             const int perRangeTombstoneOverhead = 64;
             long bytes = fixedOverhead + (SmallestKey?.Length ?? 0) + (LargestKey?.Length ?? 0);
+
             foreach (var tombstone in RangeTombstones)
             {
                 bytes += tombstone.Start.Length + tombstone.End.Length + perRangeTombstoneOverhead;
             }
+
 
             return bytes;
         }
@@ -135,12 +140,14 @@ sealed class AsyncSstReader : IAsyncDisposable
     {
         ThrowIfDisposed();
         var count = 0;
+
         for (var blockIndex = 0; blockIndex < _index.Length; blockIndex++)
         {
             var firstKey = _index[blockIndex].FirstKey;
             var nextFirstKey = blockIndex + 1 < _index.Length
                 ? _index[blockIndex + 1].FirstKey
                 : null;
+
             if ((endExclusive is null || firstKey.AsSpan().SequenceCompareTo(endExclusive) < 0) &&
                 (startInclusive is null || nextFirstKey is null ||
                  nextFirstKey.AsSpan().SequenceCompareTo(startInclusive) > 0))
@@ -149,16 +156,19 @@ sealed class AsyncSstReader : IAsyncDisposable
             }
         }
 
+
         return count;
     }
 
     public byte[] GetFirstKey(int blockIndex)
     {
         ThrowIfDisposed();
+
         if ((uint)blockIndex >= (uint)_index.Length)
         {
             throw new PantsCorruptionException("SST block index is invalid.");
         }
+
 
         return _index[blockIndex].FirstKey.ToArray();
     }
@@ -167,20 +177,24 @@ sealed class AsyncSstReader : IAsyncDisposable
         IAsyncSstSource source,
         FileMeta file,
         CancellationToken cancellationToken,
-        ResourceBudget? metadataBudget = null)
+        ResourceBudget? metadataBudget = null
+    )
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(file);
         SstMetadataAllocation? allocation = null;
+
         try
         {
             allocation = metadataBudget is null ? null : new SstMetadataAllocation(metadataBudget, file.Name);
             var fileLength = source.Length;
+
             if (file.SizeBytes != 0 && checked((ulong)fileLength) != file.SizeBytes)
             {
                 throw new PantsCorruptionException(
                     $"SST '{file.Name}' length differs from its manifest.");
             }
+
 
             if (fileLength < DiskFormat.SstFooterSize)
             {
@@ -189,6 +203,7 @@ sealed class AsyncSstReader : IAsyncDisposable
                     var trailingMagic = await source.ReadExactlyAsync(
                             fileLength - sizeof(ulong), sizeof(ulong), cancellationToken)
                         .ConfigureAwait(false);
+
                     if (BinaryPrimitives.ReadUInt64LittleEndian(trailingMagic) == DiskFormat.SstFooterMagic)
                     {
                         throw new PantsCompatibilityException("SST matches a legacy footer magic.");
@@ -226,12 +241,14 @@ sealed class AsyncSstReader : IAsyncDisposable
                 ? await ReadMetadataBlockAsync(source, fileLength, bloom, allocation, cancellationToken)
                     .ConfigureAwait(false)
                 : null;
+
             if (blockBlooms is not null)
             {
                 SstCodec.ValidateBlockBlooms(blockBlooms, index.Length);
                 retainedMetadataBytes = checked(retainedMetadataBytes + blockBlooms.Length);
                 allocation?.Retain(retainedMetadataBytes);
             }
+
 
             var trie = trieHandle is { } trieBlock
                 ? await ReadMetadataBlockAsync(source, fileLength, trieBlock, allocation, cancellationToken)
@@ -287,8 +304,12 @@ sealed class AsyncSstReader : IAsyncDisposable
     public bool HasMetadataReservation => _shared.MetadataAllocation is not null;
 
     static ValueTask<byte[]> ReadMetadataBlockAsync(
-        IAsyncSstSource source, long length, SstBlockHandle handle, SstMetadataAllocation? allocation,
-        CancellationToken cancellationToken) =>
+        IAsyncSstSource source,
+        long length,
+        SstBlockHandle handle,
+        SstMetadataAllocation? allocation,
+        CancellationToken cancellationToken
+    ) =>
         allocation is null
             ? ReadBlockAsync(source, length, handle, cancellationToken)
             : allocation.ReadBlockAsync(source, length, handle, cancellationToken);
@@ -296,16 +317,20 @@ sealed class AsyncSstReader : IAsyncDisposable
     public SstPointReadDecision GetPointReadDecision(ReadOnlySpan<byte> key)
     {
         ThrowIfDisposed();
+
         if (_index.Length == 0)
         {
             return new SstPointReadDecision(0, 0, 0, false, -1, 0);
         }
 
+
         var candidate = _trieIndex?.FindFloorBlock(key) ?? SstCodec.FindFloorBlock(_index, key);
+
         if (candidate < 0)
         {
             return new SstPointReadDecision(0, 0, 0, false, -1, 0);
         }
+
 
         var mightContain = _blockBlooms is null || SstCodec.BloomMightContain(_blockBlooms, candidate, key);
         var bloomChecks = _blockBlooms is null ? 0 : 1;
@@ -318,13 +343,16 @@ sealed class AsyncSstReader : IAsyncDisposable
 
     public async ValueTask<byte[]> ReadDataBlockAsync(
         int blockIndex,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ThrowIfDisposed();
+
         if ((uint)blockIndex >= (uint)_index.Length)
         {
             throw new PantsCorruptionException("SST point-read block index is invalid.");
         }
+
 
         SstCodec.ValidateDataBlockSize(_index[blockIndex].Handle);
         return await ReadBlockAsync(
@@ -336,13 +364,18 @@ sealed class AsyncSstReader : IAsyncDisposable
     }
 
     public ValueTask<SstReadBlock> ReadDataBlockOwnedAsync(
-        int blockIndex, ResourceBudget? resourceBudget, CancellationToken cancellationToken)
+        int blockIndex,
+        ResourceBudget? resourceBudget,
+        CancellationToken cancellationToken
+    )
     {
         ThrowIfDisposed();
+
         if ((uint)blockIndex >= (uint)_index.Length)
         {
             throw new PantsCorruptionException("SST block index is invalid.");
         }
+
         var handle = _index[blockIndex].Handle;
         SstCodec.ValidateDataBlockSize(handle);
         return SstReadBlock.ReadAsync(_source, _fileLength, handle, resourceBudget, cancellationToken);
@@ -352,7 +385,8 @@ sealed class AsyncSstReader : IAsyncDisposable
         IAsyncSstSource source,
         long fileLength,
         SstBlockHandle handle,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (handle.Offset > (ulong)fileLength ||
             handle.Size < 9 ||

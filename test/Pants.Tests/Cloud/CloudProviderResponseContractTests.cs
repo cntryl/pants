@@ -11,6 +11,7 @@ public sealed class CloudProviderResponseContractTests
     static TheoryData<string, string[], bool, bool> CreateInvalidLengths()
     {
         var data = new TheoryData<string, string[], bool, bool>();
+
         foreach (var provider in new[] { "s3", "azure", "gcs-xml", "gcs-json" })
         {
             foreach (var headers in new string[][]
@@ -26,6 +27,7 @@ public sealed class CloudProviderResponseContractTests
             }
         }
 
+
         return data;
     }
 
@@ -35,7 +37,8 @@ public sealed class CloudProviderResponseContractTests
         string provider,
         string[] declaredLengths,
         bool ranged,
-        bool knownLength)
+        bool knownLength
+    )
     {
         using var handler = new ResponseHandler(declaredLengths, ranged, knownLength);
         using var client = new HttpClient(handler);
@@ -134,10 +137,12 @@ public sealed class CloudProviderResponseContractTests
             };
             response.Headers.ETag = new EntityTagHeaderValue("\"identity\"");
             response.Headers.TryAddWithoutValidation("x-goog-generation", "42");
+
             if (ranged)
             {
                 response.Content.Headers.ContentRange = new ContentRangeHeaderValue(0, 2, 3);
             }
+
             if (declaredLengths.Length != 0)
             {
                 Assert.True(response.Content.Headers.TryAddWithoutValidation("Content-Length", declaredLengths));
@@ -178,10 +183,12 @@ public sealed class CloudProviderResponseContractTests
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var response = await base.SendAsync(request, cancellationToken);
+
             if (request.Method == HttpMethod.Get && request.RequestUri!.Query.Contains("alt=media", StringComparison.Ordinal) && DistinctMediaEtag)
             {
                 response.Headers.ETag = new EntityTagHeaderValue("\"media-etag\"");
             }
+
 
             if (request.Method == HttpMethod.Get && AfterNextGet is { } replace)
             {

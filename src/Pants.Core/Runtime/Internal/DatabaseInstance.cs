@@ -24,7 +24,8 @@ sealed class DatabaseInstance :
         TransactionMemoryPool transactionMemoryPool,
         IPantsClock clock,
         RuntimeTelemetry telemetry,
-        RuntimeComposition runtime)
+        RuntimeComposition runtime
+    )
     {
         Options = options;
         TransactionMemoryPool = transactionMemoryPool;
@@ -67,8 +68,11 @@ sealed class DatabaseInstance :
         return ValueTask.FromResult(_runtime.Coordinator.GetCloudDurableSequence());
     }
 
-    public ValueTask<bool> WaitForDurableAsync(ulong sequence, TimeSpan timeout,
-        CancellationToken cancellationToken = default)
+    public ValueTask<bool> WaitForDurableAsync(
+        ulong sequence,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default
+    )
     {
         EnsureOpen();
         return _runtime.Coordinator.WaitForCloudDurableAsync(sequence, timeout, cancellationToken);
@@ -78,7 +82,8 @@ sealed class DatabaseInstance :
 
     public async ValueTask<IPantsColumnFamily> CreateAsync(
         string name,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         EnsureOpen();
         ValidateColumnFamilyName(name);
@@ -90,7 +95,8 @@ sealed class DatabaseInstance :
 
     public async ValueTask<IPantsColumnFamily?> GetAsync(
         string name,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         EnsureOpen();
         ArgumentNullException.ThrowIfNull(name);
@@ -117,7 +123,8 @@ sealed class DatabaseInstance :
 
     public ValueTask DropAsync(
         IPantsColumnFamily columnFamily,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         EnsureOpen();
         var handle = ValidateDroppableColumnFamily(columnFamily);
@@ -126,7 +133,8 @@ sealed class DatabaseInstance :
 
     public ValueTask DropDiscardingUnflushedAsync(
         IPantsColumnFamily columnFamily,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         EnsureOpen();
         var handle = ValidateDroppableColumnFamily(columnFamily);
@@ -151,7 +159,8 @@ sealed class DatabaseInstance :
 
     public async ValueTask ShutdownAsync(
         TimeSpan timeout,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         // Matching Midge, a zero budget still begins shutdown and reports a retryable Timeout
         // unless the database is already closed.
@@ -192,6 +201,7 @@ sealed class DatabaseInstance :
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             deadline.Token);
+
         try
         {
             await shutdown.WaitAsync(linked.Token).ConfigureAwait(false);
@@ -295,7 +305,8 @@ sealed class DatabaseInstance :
 
     public ValueTask FlushAsync(
         IPantsColumnFamily columnFamily,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         EnsureOpen();
         var handle = ValidateColumnFamily(columnFamily);
@@ -310,7 +321,8 @@ sealed class DatabaseInstance :
 
     public ValueTask SetBackgroundCompactionAsync(
         bool enabled,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         EnsureOpen();
         return _runtime.Coordinator.SetBackgroundCompactionAsync(enabled, cancellationToken);
@@ -319,7 +331,8 @@ sealed class DatabaseInstance :
     public ValueTask<bool> WaitForWriteStallClearAsync(
         IPantsColumnFamily columnFamily,
         TimeSpan timeout,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         EnsureOpen();
         var handle = ValidateColumnFamily(columnFamily);
@@ -333,7 +346,8 @@ sealed class DatabaseInstance :
 
     public ValueTask<PantsStorageVerificationReport> VerifyAsync(
         TimeSpan timeout,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         EnsureOpen();
         return _runtime.Coordinator.VerifyStorageAsync(timeout, cancellationToken);
@@ -342,7 +356,8 @@ sealed class DatabaseInstance :
     public ValueTask<PantsBackupManifest> BackupAsync(
         string destination,
         TimeSpan timeout,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         EnsureOpen();
         return _runtime.Coordinator.BackupAsync(destination, timeout, cancellationToken);
@@ -351,23 +366,28 @@ sealed class DatabaseInstance :
     public async ValueTask<IPantsTransaction> BeginAsync(
         IPantsColumnFamily columnFamily,
         PantsTransactionMode mode,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         EnsureOpen();
         var handle = ValidateColumnFamily(columnFamily);
+
         if (!Enum.IsDefined(mode))
         {
             throw PantsException.InvalidArgument("Transaction mode is invalid.");
         }
 
+
         using var activity = PantsDiagnostics.ActivitySource.StartActivity(
             "PantsDatabase.BeginTransaction");
         activity?.SetTag("pants.column_family.id", handle.Id);
         activity?.SetTag("pants.transaction.mode", mode.ToString());
+
         if (mode == PantsTransactionMode.ReadOnly)
         {
             return _runtime.Coordinator.BeginReadOnlyTransaction(this, handle, cancellationToken);
         }
+
 
         return await _runtime.Coordinator.BeginTransactionAsync(this, handle, mode, cancellationToken)
             .ConfigureAwait(false);
@@ -376,7 +396,8 @@ sealed class DatabaseInstance :
     internal static async ValueTask<DatabaseInstance> OpenAsync(
         PantsOpenOptions options,
         RuntimeDependencies dependencies,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(dependencies);
@@ -407,6 +428,7 @@ sealed class DatabaseInstance :
             var encodingFailure = _runtime.Coordinator.WalEncodingFailure;
             await _runtime.DisposeAsync().ConfigureAwait(false);
             Volatile.Write(ref _lifecycleState, 2);
+
             if (encodingFailure is not null)
             {
                 completion.TrySetException(encodingFailure);
@@ -450,6 +472,7 @@ sealed class DatabaseInstance :
     internal void EnsureOpen()
     {
         var state = Volatile.Read(ref _lifecycleState);
+
         if (state != 0)
         {
             throw state == 1
@@ -472,7 +495,8 @@ sealed class DatabaseInstance :
     internal ValueTask<ulong> CommitTransactionAsync(
         TransactionInstance transaction,
         PantsWriteOptions options,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         EnsureOpen();
         return _runtime.Coordinator.CommitAsync(options, transaction.BuildCommitPayload(), cancellationToken);
@@ -496,7 +520,8 @@ sealed class DatabaseInstance :
 
     internal ValueTask<long> RegisterScanSnapshotAsync(
         DatabaseVersion snapshot,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         _runtime.Coordinator.RegisterScanSnapshotAsync(snapshot, cancellationToken);
 
     internal ValueTask ReleaseScanSnapshotAsync(long snapshotId) =>
@@ -506,7 +531,8 @@ sealed class DatabaseInstance :
         IReadOnlyList<FileMeta> candidatesNewestFirst,
         ReadOnlyMemory<byte> key,
         PointReadObservation observation,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         _runtime.Coordinator.TryReadPointValueAsync(
             candidatesNewestFirst,
             key,
@@ -515,7 +541,8 @@ sealed class DatabaseInstance :
 
     internal ValueTask ReportPointReadAsync(
         PointReadObservation observation,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         _runtime.Coordinator.ReportPointReadAsync(observation, cancellationToken);
 
     internal ValueTask<IReadOnlyList<AsyncSstScanSource>> CreateScanSourcesAsync(
@@ -524,7 +551,8 @@ sealed class DatabaseInstance :
         byte[]? startInclusive,
         byte[]? endExclusive,
         PantsCacheFill cacheFill,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         _runtime.Coordinator.CreateScanSourcesAsync(
             candidates,
             direction,
@@ -543,6 +571,7 @@ sealed class DatabaseInstance :
     {
         ArgumentNullException.ThrowIfNull(name);
         var utf8Length = Encoding.UTF8.GetByteCount(name);
+
         if (utf8Length is 0 or > 255 || name.Contains('\0') || name == "default")
         {
             throw PantsException.InvalidArgument(
@@ -553,11 +582,13 @@ sealed class DatabaseInstance :
     ColumnFamilyHandle ValidateColumnFamily(IPantsColumnFamily columnFamily)
     {
         ArgumentNullException.ThrowIfNull(columnFamily);
+
         if (columnFamily is not ColumnFamilyHandle handle || !handle.IsOwnedBy(_handleOwner))
         {
             throw PantsException.InvalidArgument(
                 "The column-family handle was not created by this database instance.");
         }
+
 
         return handle;
     }
@@ -565,10 +596,12 @@ sealed class DatabaseInstance :
     ColumnFamilyHandle ValidateDroppableColumnFamily(IPantsColumnFamily columnFamily)
     {
         var handle = ValidateColumnFamily(columnFamily);
+
         if (handle.Id == 0)
         {
             throw PantsException.InvalidArgument("The default column family cannot be dropped.");
         }
+
 
         return handle;
     }

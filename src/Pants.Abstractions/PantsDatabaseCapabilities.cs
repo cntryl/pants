@@ -5,7 +5,8 @@ public sealed record PantsDatabaseCapabilities
     public PantsDatabaseCapabilities(
         bool isPersistent,
         bool isCloudBacked,
-        IEnumerable<PantsDurability> supportedDurabilities)
+        IEnumerable<PantsDurability> supportedDurabilities
+    )
     {
         ArgumentNullException.ThrowIfNull(supportedDurabilities);
         IsPersistent = isPersistent;

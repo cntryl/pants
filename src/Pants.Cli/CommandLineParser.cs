@@ -41,10 +41,12 @@ internal static class PantsCliCommandLineParser
         }
 
         var command = args[0];
+
         if (command is "--help" or "-h")
         {
             return PantsCliParsedCommand.Help();
         }
+
 
         if (command != "verify")
         {
@@ -52,6 +54,7 @@ internal static class PantsCliCommandLineParser
         }
 
         string? path = null;
+
         foreach (var arg in args.Skip(1))
         {
             if (arg == "--json")
@@ -76,6 +79,7 @@ internal static class PantsCliCommandLineParser
 
             path = arg;
         }
+
 
         return path is null
             ? PantsCliParsedCommand.Error(Usage, format)

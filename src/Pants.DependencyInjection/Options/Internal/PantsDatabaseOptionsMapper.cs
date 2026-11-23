@@ -44,10 +44,12 @@ static class PantsDatabaseOptionsMapper
             .WithMinimumEpoch(options.MinimumEpoch)
             .WithBackgroundCompaction(options.BackgroundCompaction)
             .WithWriteBackpressure(options.WriteBackpressure);
+
         if (options.LeaseClockSkewTolerance is { } tolerance)
         {
             result = result.WithLeaseClockSkewTolerance(tolerance);
         }
+
         PantsOpenOptionsValidator.Validate(result);
         return result;
     }
@@ -86,11 +88,13 @@ static class PantsDatabaseOptionsMapper
         var wal = cloud.Wal is null ? shared : CreateLocation(cloud.Wal);
         var sst = cloud.Sst is null ? shared : CreateLocation(cloud.Sst);
         var control = cloud.Control is null ? shared : CreateLocation(cloud.Control);
+
         if (wal is null || sst is null || control is null)
         {
             throw new InvalidOperationException(
                 "Cloud storage requires a shared location or explicit WAL, SST, and control locations.");
         }
+
 
         return new PantsStorageConfiguration.Cloud(
             RequireText(options.Path, "The cloud local cache path must not be empty."),
@@ -161,7 +165,8 @@ static class PantsDatabaseOptionsMapper
 
     static PantsS3CredentialSource CreateS3Credential(
         PantsCloudCredentialOptions options,
-        bool defaultToAwsChain = true) =>
+        bool defaultToAwsChain = true
+    ) =>
         options.Kind switch
         {
             PantsCloudCredentialKind.Default when !defaultToAwsChain =>
@@ -270,7 +275,8 @@ static class PantsDatabaseOptionsMapper
 
     static InvalidOperationException InvalidCredential(
         PantsCloudCredentialKind kind,
-        string provider) =>
+        string provider
+    ) =>
         new($"Credential kind '{kind}' cannot be used with {provider}.");
 
     static string RequireText(string? value, string message)

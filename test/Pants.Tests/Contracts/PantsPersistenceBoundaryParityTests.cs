@@ -34,10 +34,12 @@ public sealed class PantsPersistenceBoundaryParityTests
 
         await using var reopened = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
+
         for (var index = 0; index < 3; index++)
         {
             Assert.Equal($"value-{index}", await ReadAsync(reopened, $"key-{index}"));
         }
+
 
         await reopened.Maintenance.CompactAllAsync();
         Assert.Equal(PantsEngineHealth.Healthy, (await reopened.Diagnostics.GetRuntimeMetricsAsync()).Health);

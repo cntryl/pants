@@ -445,7 +445,8 @@ public sealed class ProviderSstPublisherTests
     static ProviderSstPublisher CreatePublisher(
         ICloudObjectStore store,
         SstPublicationAdmission? admission = null,
-        ProviderSstIdentityRegistry? identityRegistry = null) =>
+        ProviderSstIdentityRegistry? identityRegistry = null
+    ) =>
         new(
             store,
             static () => { },

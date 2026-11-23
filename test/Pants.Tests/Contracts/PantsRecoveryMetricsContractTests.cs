@@ -61,10 +61,12 @@ public sealed class PantsRecoveryMetricsContractTests
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             var value = new byte[900];
+
             for (var index = 0; index < 6; index++)
             {
                 transaction.Put(TestBytes.FromString($"split-{index}"), value);
             }
+
 
             Assert.NotEmpty(Directory.GetFiles(Path.Combine(directory.Path, "txn"), "*.run"));
             await transaction.CommitAsync(PantsWriteOptions.Sync);

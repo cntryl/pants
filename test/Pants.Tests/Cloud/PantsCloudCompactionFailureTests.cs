@@ -266,6 +266,7 @@ public sealed class PantsCloudCompactionFailureTests
             failpoints);
         var family = database.ColumnFamilies.DefaultFamily;
         var value = new byte[512];
+
         for (var file = 0; file < 4; file++)
         {
             for (var index = 0; index < 400; index++)
@@ -279,6 +280,7 @@ public sealed class PantsCloudCompactionFailureTests
 
             await database.Maintenance.FlushAsync(family);
         }
+
 
         var initialRemoteCount = RemoteSsts(directory.Path).Length;
         failpoints.Arm(Failpoint.BeforeCloudUpload);
@@ -296,7 +298,8 @@ public sealed class PantsCloudCompactionFailureTests
     static async ValueTask SeedCompactionInputsAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,
-        string keyPrefix)
+        string keyPrefix
+    )
     {
         for (var batch = 0; batch < 4; batch++)
         {
@@ -308,7 +311,8 @@ public sealed class PantsCloudCompactionFailureTests
     static async ValueTask SeedWritesAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,
-        string keyPrefix)
+        string keyPrefix
+    )
     {
         for (var index = 0; index < 6; index++)
         {
@@ -320,17 +324,20 @@ public sealed class PantsCloudCompactionFailureTests
         IPantsDatabase database,
         IPantsColumnFamily family,
         string key,
-        bool forceRewrite = false)
+        bool forceRewrite = false
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), "value"u8.ToArray());
+
         if (forceRewrite)
         {
             // Overlap only empty keyspace so this fixture requires a physical rewrite.
             transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
         }
+
         await transaction.CommitAsync(PantsWriteOptions.CloudAsync);
     }
 
@@ -338,11 +345,13 @@ public sealed class PantsCloudCompactionFailureTests
         IPantsDatabase database,
         IPantsColumnFamily family,
         string keyPrefix,
-        int count = 4)
+        int count = 4
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < count; index++)
         {
             var value = Assert.IsType<ReadOnlyMemory<byte>>(
@@ -354,6 +363,7 @@ public sealed class PantsCloudCompactionFailureTests
     static async ValueTask WaitForAsync(Func<bool> predicate)
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         while (!predicate())
         {
             await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
@@ -369,12 +379,14 @@ public sealed class PantsCloudCompactionFailureTests
 
     static ValueTask<IPantsDatabase> OpenAsync(
         string path,
-        CloudCompactionFailpointHandler failpoints) =>
+        CloudCompactionFailpointHandler failpoints
+    ) =>
         OpenAsync(CreateOptions(path), failpoints);
 
     static ValueTask<IPantsDatabase> OpenAsync(
         PantsOpenOptions options,
-        CloudCompactionFailpointHandler failpoints) =>
+        CloudCompactionFailpointHandler failpoints
+    ) =>
         PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(failpoints));

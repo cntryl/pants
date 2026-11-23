@@ -31,7 +31,8 @@ sealed class AsyncSstReaderCache : IDisposable
 
     internal AsyncSstReaderCache(
         long budgetBytes,
-        SstReaderHandleBudget openReaderHandleBudget)
+        SstReaderHandleBudget openReaderHandleBudget
+    )
     {
         ArgumentNullException.ThrowIfNull(openReaderHandleBudget);
         ArgumentOutOfRangeException.ThrowIfNegative(budgetBytes);
@@ -45,22 +46,27 @@ sealed class AsyncSstReaderCache : IDisposable
         lock (_gate)
         {
             var node = _recency.First;
+
             while (node is not null)
             {
                 var slot = node.Value;
+
                 if (slot.Reader is { HasExclusiveReference: true })
                 {
                     _slots.Remove(slot.Identity);
                     reader = Detach(slot);
                     break;
                 }
+
                 node = node.Next;
             }
         }
+
         if (reader is null)
         {
             return false;
         }
+
         DisposeAll([reader]);
         return true;
     }
@@ -91,17 +97,20 @@ sealed class AsyncSstReaderCache : IDisposable
     public async ValueTask<AsyncSstReader> GetOrOpenAsync(
         FileMeta file,
         Func<CancellationToken, ValueTask<AsyncSstReader>> openReader,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         (await GetOrOpenWithOutcomeAsync(file, openReader, cancellationToken).ConfigureAwait(false)).Reader;
 
     public async ValueTask<(AsyncSstReader Reader, bool CacheHit)> GetOrOpenWithOutcomeAsync(
         FileMeta file,
         Func<CancellationToken, ValueTask<AsyncSstReader>> openReader,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(file);
         ArgumentNullException.ThrowIfNull(openReader);
         var observedMiss = false;
+
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -115,6 +124,7 @@ sealed class AsyncSstReaderCache : IDisposable
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
                 var slot = GetOrCreateSlot(file);
+
                 if (slot.Reader is { } cached)
                 {
                     Touch(slot);
@@ -123,7 +133,9 @@ sealed class AsyncSstReaderCache : IDisposable
 
                 // A caller that opens or joins a pending open missed the cache, even
                 // though the next loop acquires its handle from the published slot.
+
                 observedMiss = true;
+
                 if (slot.Opening is { } opening)
                 {
                     pending = opening.Task;
@@ -132,6 +144,7 @@ sealed class AsyncSstReaderCache : IDisposable
                 {
                     var newOpening = new TaskCompletionSource(
                         TaskCreationOptions.RunContinuationsAsynchronously);
+
                     if (_openReaderHandleBudget.TryReserve(out handleReservation))
                     {
                         slot.Opening = newOpening;
@@ -196,7 +209,8 @@ sealed class AsyncSstReaderCache : IDisposable
     /// </summary>
     public async ValueTask<AsyncSstReader> OpenUncachedAsync(
         Func<CancellationToken, ValueTask<AsyncSstReader>> openReader,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(openReader);
         var handleReservation = await ReserveOpenHandleAsync(cancellationToken)
@@ -204,6 +218,7 @@ sealed class AsyncSstReaderCache : IDisposable
         AsyncSstReader? opened = null;
         var reservationTransferred = false;
         var sourceMayStillBeOpen = false;
+
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -221,6 +236,7 @@ sealed class AsyncSstReaderCache : IDisposable
         catch (Exception exception)
         {
             sourceMayStillBeOpen = exception is AsyncSstSourceCleanupException;
+
             if (opened is not null)
             {
                 try
@@ -233,6 +249,7 @@ sealed class AsyncSstReaderCache : IDisposable
                     throw new AggregateException(exception, cleanupException);
                 }
             }
+
 
             if (!reservationTransferred && !sourceMayStillBeOpen)
             {
@@ -256,6 +273,7 @@ sealed class AsyncSstReaderCache : IDisposable
             var matches = _slots.Keys
                 .Where(identity => StringComparer.Ordinal.Equals(identity.Name, name))
                 .ToArray();
+
             foreach (var identity in matches)
             {
                 if (_slots.Remove(identity, out var slot) && Detach(slot) is { } reader)
@@ -272,12 +290,14 @@ sealed class AsyncSstReaderCache : IDisposable
         Slot slot,
         Func<CancellationToken, ValueTask<AsyncSstReader>> openReader,
         IDisposable handleReservation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var completion = slot.Opening!;
         AsyncSstReader? opened = null;
         var reservationTransferred = false;
         var sourceMayStillBeOpen = false;
+
         try
         {
             opened = await openReader(cancellationToken).ConfigureAwait(false);
@@ -288,6 +308,7 @@ sealed class AsyncSstReaderCache : IDisposable
         {
             Exception failure = exception;
             sourceMayStillBeOpen = exception is AsyncSstSourceCleanupException;
+
             if (opened is not null)
             {
                 try
@@ -301,6 +322,7 @@ sealed class AsyncSstReaderCache : IDisposable
                 }
             }
 
+
             if (!reservationTransferred && !sourceMayStillBeOpen)
             {
                 handleReservation.Dispose();
@@ -312,6 +334,7 @@ sealed class AsyncSstReaderCache : IDisposable
                 RemoveEmptySlot(slot);
             }
 
+
             if (failure is OperationCanceledException && cancellationToken.IsCancellationRequested)
             {
                 completion.TrySetCanceled(cancellationToken);
@@ -320,14 +343,17 @@ sealed class AsyncSstReaderCache : IDisposable
             {
                 completion.TrySetException(failure);
             }
+
             return;
         }
+
 
         List<AsyncSstReader> evicted;
         var discard = false;
         lock (_gate)
         {
             slot.Opening = null;
+
             if (_disposed ||
                 !_slots.TryGetValue(slot.Identity, out var current) ||
                 !ReferenceEquals(current, slot))
@@ -364,11 +390,13 @@ sealed class AsyncSstReaderCache : IDisposable
     Slot GetOrCreateSlot(FileMeta file)
     {
         var identity = SstFileIdentity.Of(file);
+
         if (!_slots.TryGetValue(identity, out var slot))
         {
             slot = new Slot(identity);
             _slots.Add(identity, slot);
         }
+
 
         return slot;
     }
@@ -387,11 +415,13 @@ sealed class AsyncSstReaderCache : IDisposable
         while (_recency.First is { } node)
         {
             var slot = node.Value;
+
             if (_slots.TryGetValue(slot.Identity, out var current) &&
                 ReferenceEquals(current, slot))
             {
                 _slots.Remove(slot.Identity);
             }
+
 
             if (Detach(slot) is { } reader)
             {
@@ -413,12 +443,15 @@ sealed class AsyncSstReaderCache : IDisposable
             lock (_gate)
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
+
                 if (_openReaderHandleBudget.TryReserve(out reservation))
                 {
                     return reservation!;
                 }
 
+
                 evicted = DetachLeastRecent();
+
                 if (evicted is null)
                 {
                     capacityError = CreateHandleBudgetException();
@@ -446,21 +479,26 @@ sealed class AsyncSstReaderCache : IDisposable
     {
         var evicted = new List<AsyncSstReader>();
         var node = _recency.First;
+
         while (_cachedBytes > _budgetBytes && node is not null)
         {
             var next = node.Next;
             var slot = node.Value;
+
             if (!ReferenceEquals(slot, keep))
             {
                 _slots.Remove(slot.Identity);
+
                 if (Detach(slot) is { } reader)
                 {
                     evicted.Add(reader);
                 }
             }
 
+
             node = next;
         }
+
 
         return evicted;
     }
@@ -469,11 +507,13 @@ sealed class AsyncSstReaderCache : IDisposable
     {
         var reader = slot.Reader;
         slot.Reader = null;
+
         if (slot.Node is { List: not null } node)
         {
             _recency.Remove(node);
             _cachedBytes -= slot.Bytes;
         }
+
 
         return reader;
     }
@@ -481,6 +521,7 @@ sealed class AsyncSstReaderCache : IDisposable
     List<AsyncSstReader> DetachAll()
     {
         var readers = new List<AsyncSstReader>();
+
         foreach (var slot in _slots.Values)
         {
             if (Detach(slot) is { } reader)
@@ -488,6 +529,7 @@ sealed class AsyncSstReaderCache : IDisposable
                 readers.Add(reader);
             }
         }
+
 
         _slots.Clear();
         return readers;

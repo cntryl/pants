@@ -47,6 +47,7 @@ static class TransactionSpillFootprint
 
         long runBytes = RunHeaderBytes;
         long rangeBytes = RangeIndexHeaderBytes;
+
         for (var index = 0; index < sortedOperations.Count; index++)
         {
             var operation = sortedOperations[index];
@@ -75,6 +76,7 @@ static class TransactionSpillFootprint
                     secondBytes);
             }
         }
+
 
         return checked(runBytes + rangeBytes);
     }

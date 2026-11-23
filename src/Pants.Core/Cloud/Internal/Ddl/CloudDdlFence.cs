@@ -11,10 +11,12 @@ static class CloudDdlFence
         }
 
         var registry = CloudDdlJson.DeserializeRegistry(registryBytes);
+
         if (registry.WriterEpoch > writerEpoch)
         {
             throw new PantsFencedException("The cloud DDL registry is owned by a successor.");
         }
+
 
         registry.WriterEpoch = writerEpoch;
         return CloudDdlJson.SerializeRegistry(registry);

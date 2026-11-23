@@ -12,7 +12,8 @@ sealed class HybridCacheManager : IDisposable
 
     public HybridCacheManager(
         long maximumLocalBytes,
-        IFailpointHandler? failpoints = null)
+        IFailpointHandler? failpoints = null
+    )
     {
         _policy = new HybridStorageBudgetPolicy(maximumLocalBytes);
         _failpoints = failpoints ?? NullPantsFailpointHandler.Instance;
@@ -57,7 +58,8 @@ sealed class HybridCacheManager : IDisposable
     /// </summary>
     public StorageBudgetLedger.StorageReservation Reserve(
         StorageAdmissionKind kind,
-        long estimateBytes) =>
+        long estimateBytes
+    ) =>
         Ledger.Reserve(kind, estimateBytes);
 
     /// <summary>
@@ -75,7 +77,8 @@ sealed class HybridCacheManager : IDisposable
     public async ValueTask<StorageBudgetLedger.StorageReservation> ReserveFlushAsync(
         IHybridCacheStore store,
         long estimateBytes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (Ledger.TryReserve(StorageAdmissionKind.Flush, estimateBytes, out var reservation))
         {
@@ -104,7 +107,8 @@ sealed class HybridCacheManager : IDisposable
     public async ValueTask<StorageBudgetLedger.StorageReservation> ReserveCompactionStagingAsync(
         IHybridCacheStore store,
         long windowBytes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (Ledger.TryReserve(StorageAdmissionKind.Compaction, windowBytes, out var reservation))
         {
@@ -125,10 +129,12 @@ sealed class HybridCacheManager : IDisposable
     /// </summary>
     public async ValueTask<IDisposable> ProtectSstsFromEvictionAsync(
         IEnumerable<string> names,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var protectedNames = names.Distinct(StringComparer.Ordinal).ToArray();
         await _evictionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
         try
         {
             lock (_protectedSstsLock)
@@ -143,6 +149,7 @@ sealed class HybridCacheManager : IDisposable
         {
             _evictionGate.Release();
         }
+
 
         return new EvictionProtection(this, protectedNames);
     }
@@ -162,14 +169,17 @@ sealed class HybridCacheManager : IDisposable
         CommitPayload payload,
         PantsPerformanceGoal performanceGoal,
         PantsDurability durability,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(payload);
+
         if (payload.Operations.Count == 0)
         {
             return;
         }
+
 
         var footprints = new Dictionary<ColumnFamilyIdentity, SstFlushFootprint>(
             ColumnFamilyIdentityComparer.Instance);
@@ -207,6 +217,7 @@ sealed class HybridCacheManager : IDisposable
 
         var flushOutputBytes = footprints.Values.Sum(footprint =>
             footprint.MeasureUpperBound(performanceGoal));
+
         if (flushOutputBytes > MemtableFlushWindowBytes)
         {
             Ledger.RecordCapacityRejection(StorageAdmissionKind.FlushHeadroom, flushOutputBytes);
@@ -215,8 +226,10 @@ sealed class HybridCacheManager : IDisposable
                 $"hybrid memtable flush window of {MemtableFlushWindowBytes} bytes.");
         }
 
+
         var flushStagingBytes = footprints.Values.Max(footprint =>
             footprint.MeasureCloudFlushStagingUpperBound());
+
         if (flushStagingBytes > MemtableFlushWindowBytes)
         {
             Ledger.RecordCapacityRejection(StorageAdmissionKind.FlushHeadroom, flushStagingBytes);
@@ -225,7 +238,9 @@ sealed class HybridCacheManager : IDisposable
                 $"exceeds the hybrid memtable flush window of {MemtableFlushWindowBytes} bytes.");
         }
 
+
         var walBytes = 0L;
+
         if (durability != PantsDurability.BestEffort)
         {
             if (payload.IsSpilled)
@@ -253,6 +268,7 @@ sealed class HybridCacheManager : IDisposable
             }
         }
 
+
         var requiredBytes = checked(flushOutputBytes + walBytes);
         const StorageAdmissionKind admissionKind = StorageAdmissionKind.Wal;
         await EvictToFitAsync(store, requiredBytes, admissionKind, cancellationToken)
@@ -271,9 +287,11 @@ sealed class HybridCacheManager : IDisposable
 
     public async ValueTask EvictIfNeededAsync(
         IHybridCacheStore store,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await _evictionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
         try
         {
             if (!RequiresEviction(store))
@@ -288,14 +306,17 @@ sealed class HybridCacheManager : IDisposable
                     .ToArray());
             Volatile.Write(ref _pendingEvictions, planned.Count);
             _failpoints.Hit(Failpoint.BeforeHybridSstEviction);
+
             foreach (var candidate in planned)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+
                 if (!store.IsSstLocal(candidate.Name))
                 {
                     Interlocked.Decrement(ref _pendingEvictions);
                     continue;
                 }
+
 
                 await store.VerifyRemoteSstMatchesLocalAsync(candidate.Name, cancellationToken)
                     .ConfigureAwait(false);
@@ -323,9 +344,11 @@ sealed class HybridCacheManager : IDisposable
         IHybridCacheStore store,
         long requiredBytes,
         StorageAdmissionKind admissionKind,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await _evictionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
         try
         {
             var candidates = store.GetLocalManifestSsts()
@@ -334,6 +357,7 @@ sealed class HybridCacheManager : IDisposable
             var projectedBytes = Ledger.ChargedBytes;
             var ceiling = Ledger.GetAdmissionCeilingBytes(admissionKind);
             var planned = new List<HybridLocalSst>();
+
             foreach (var candidate in candidates)
             {
                 if (checked(projectedBytes + requiredBytes) <= ceiling)
@@ -344,6 +368,7 @@ sealed class HybridCacheManager : IDisposable
                 planned.Add(candidate);
                 projectedBytes = Math.Max(0, projectedBytes - candidate.SizeBytes);
             }
+
 
             if (checked(projectedBytes + requiredBytes) > ceiling)
             {
@@ -358,15 +383,18 @@ sealed class HybridCacheManager : IDisposable
 
             Volatile.Write(ref _pendingEvictions, planned.Count);
             _failpoints.Hit(Failpoint.BeforeHybridSstEviction);
+
             foreach (var candidate in planned)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+
                 if (store.IsSstLocal(candidate.Name))
                 {
                     await store.VerifyRemoteSstMatchesLocalAsync(candidate.Name, cancellationToken)
                         .ConfigureAwait(false);
                     store.EvictLocalSst(candidate.Name);
                 }
+
 
                 Interlocked.Decrement(ref _pendingEvictions);
             }
@@ -380,10 +408,12 @@ sealed class HybridCacheManager : IDisposable
 
     List<HybridLocalSst> PlanEvictions(
         long totalCommittedBytes,
-        IReadOnlyList<HybridLocalSst> candidates)
+        IReadOnlyList<HybridLocalSst> candidates
+    )
     {
         var planned = new List<HybridLocalSst>();
         var projectedBytes = totalCommittedBytes;
+
         foreach (var candidate in candidates)
         {
             if (_policy.GetUsagePercent(projectedBytes) <
@@ -395,6 +425,7 @@ sealed class HybridCacheManager : IDisposable
             planned.Add(candidate);
             projectedBytes = Math.Max(0, projectedBytes - candidate.SizeBytes);
         }
+
 
         return planned;
     }
@@ -410,15 +441,18 @@ sealed class HybridCacheManager : IDisposable
     public async ValueTask EnsureLocalSstsAsync(
         IHybridCacheStore store,
         IEnumerable<string> names,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         foreach (var name in names.Distinct(StringComparer.Ordinal))
         {
             cancellationToken.ThrowIfCancellationRequested();
+
             if (store.IsSstLocal(name))
             {
                 continue;
             }
+
 
             var estimate = store.TryGetManifestSstSizeBytes(name, out var sizeBytes)
                 ? sizeBytes
@@ -443,6 +477,7 @@ sealed class HybridCacheManager : IDisposable
             foreach (var name in names)
             {
                 var count = _protectedSsts[name];
+
                 if (count == 1)
                 {
                     _protectedSsts.Remove(name);

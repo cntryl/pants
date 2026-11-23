@@ -32,7 +32,8 @@ public sealed class LsmSpecSchemaFixtureTests
         string schemaPath,
         string instancePath,
         bool expectedValid,
-        string[] referencePaths)
+        string[] referencePaths
+    )
     {
         var references = referencePaths
             .Select(static path => new AdditionalSchemaFile(ReadSchemaId(path), path))
@@ -63,6 +64,7 @@ public sealed class LsmSpecSchemaFixtureTests
         {
             using var index = JsonDocument.Parse(File.ReadAllBytes(indexPath));
             var indexDirectory = Path.GetDirectoryName(indexPath)!;
+
             foreach (var fixture in index.RootElement.GetProperty("fixtures"u8).EnumerateArray())
             {
                 var schemaRelativePath = fixture.TryGetProperty("schema"u8, out var schema)

@@ -11,7 +11,8 @@ static class TransactionSpillTestHarness
         string path,
         long transactionMemoryPoolBytes = 1_024,
         long? memtableSizeLimitBytes = null,
-        long memoryBudgetBytes = DefaultMemoryBudgetBytes) =>
+        long memoryBudgetBytes = DefaultMemoryBudgetBytes
+    ) =>
         PantsDatabase.OpenAsync(CreateOptions(
             mode,
             path,
@@ -24,7 +25,8 @@ static class TransactionSpillTestHarness
         string path,
         long transactionMemoryPoolBytes = 1_024,
         long? memtableSizeLimitBytes = null,
-        long memoryBudgetBytes = DefaultMemoryBudgetBytes)
+        long memoryBudgetBytes = DefaultMemoryBudgetBytes
+    )
     {
         var storageOptions = mode switch
         {
@@ -72,7 +74,8 @@ static class TransactionSpillTestHarness
 
     internal static async Task<ReadOnlyMemory<byte>?> GetAsync(
         IPantsDatabase database,
-        ReadOnlyMemory<byte> key)
+        ReadOnlyMemory<byte> key
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,

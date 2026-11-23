@@ -69,6 +69,7 @@ sealed class PeakWorkingSetMonitor : IAsyncDisposable
         {
             _process.Refresh();
             var candidate = _process.WorkingSet64;
+
             try
             {
                 candidate = Math.Max(candidate, _process.PeakWorkingSet64);
@@ -82,9 +83,11 @@ sealed class PeakWorkingSetMonitor : IAsyncDisposable
                 // Fall back when only the peak counter is unavailable for this process.
             }
 
+
             while (true)
             {
                 var current = Interlocked.Read(ref _peakBytes);
+
                 if (candidate <= current ||
                     Interlocked.CompareExchange(ref _peakBytes, candidate, current) == current)
                 {

@@ -171,6 +171,7 @@ public sealed class PantsCompressionCompatibilityTests
         var block = SstBlockCodec
             .CompressWithTrailer(StructuredBlock(16 * 1024), algorithm)
             .ToArray();
+
         if (algorithm == CompressionAlgorithm.Lz4)
         {
             BinaryPrimitives.WriteUInt32LittleEndian(block, 64 * 1024 * 1024U + 1);
@@ -179,6 +180,7 @@ public sealed class PantsCompressionCompatibilityTests
         {
             block[0] ^= 0xff;
         }
+
 
         RewriteTrailerCrc(block);
 
@@ -236,6 +238,7 @@ public sealed class PantsCompressionCompatibilityTests
         var rows = await ReadAllAsync(read);
 
         Assert.Equal(latencyRecords.Length + economyRecords.Length, rows.Count);
+
         foreach (var record in latencyRecords.Concat(economyRecords))
         {
             Assert.Equal(record.Value, (await read.GetAsync(record.Key))!.Value.ToArray());
@@ -253,6 +256,7 @@ public sealed class PantsCompressionCompatibilityTests
                      await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Latency)))
         {
             var family = await latency.ColumnFamilies.CreateAsync("policies");
+
             foreach (var batch in batches[..3])
             {
                 await WriteRecordsAndFlushAsync(latency, family, batch);
@@ -288,6 +292,7 @@ public sealed class PantsCompressionCompatibilityTests
         await using var read = await reopened.Transactions.BeginAsync(reopenedFamily, PantsTransactionMode.ReadOnly);
         var rows = await ReadAllAsync(read);
         Assert.Equal(batches.Sum(static batch => batch.Length), rows.Count);
+
         foreach (var record in batches.SelectMany(static batch => batch))
         {
             Assert.Equal(record.Value, (await read.GetAsync(record.Key))!.Value.ToArray());
@@ -391,6 +396,7 @@ public sealed class PantsCompressionCompatibilityTests
         Assert.NotEmpty(firstSsts);
         Assert.Equal(firstSsts.Select(static file => file.Name), secondSsts.Select(static file => file.Name));
         Assert.Equal(firstSsts.Length, secondSsts.Length);
+
         for (var index = 0; index < firstSsts.Length; index++)
         {
             Assert.Equal(firstSsts[index].Bytes, secondSsts[index].Bytes);
@@ -407,15 +413,18 @@ public sealed class PantsCompressionCompatibilityTests
     static async Task WriteRecordsAndFlushAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,
-        IReadOnlyList<KeyValuePair<byte[], byte[]>> records)
+        IReadOnlyList<KeyValuePair<byte[], byte[]>> records
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadWrite);
+
         foreach (var record in records)
         {
             transaction.Put(record.Key, record.Value);
         }
+
 
         await transaction.CommitAsync(PantsWriteOptions.Sync);
         await database.Maintenance.FlushAsync(family);
@@ -423,7 +432,8 @@ public sealed class PantsCompressionCompatibilityTests
 
     static async Task WriteFreshAdaptiveDatabaseAsync(
         string path,
-        IReadOnlyList<KeyValuePair<byte[], byte[]>> records)
+        IReadOnlyList<KeyValuePair<byte[], byte[]>> records
+    )
     {
         await using var database = await PantsDatabase.OpenAsync(
             LocalOptions(path, PantsPerformanceGoal.Throughput));
@@ -435,10 +445,12 @@ public sealed class PantsCompressionCompatibilityTests
     {
         var pattern = "account=0042|region=east|status=active|segment=business|"u8.ToArray();
         var bytes = new byte[size];
+
         for (var index = 0; index < bytes.Length; index++)
         {
             bytes[index] = pattern[index % pattern.Length];
         }
+
 
         return bytes;
     }
@@ -451,10 +463,12 @@ public sealed class PantsCompressionCompatibilityTests
                     $"order={index:0000}|region={Regions[index % Regions.Length]}|" +
                     $"state=committed|class={Classes[index % Classes.Length]}|");
                 var value = new byte[4 * 1024];
+
                 for (var valueIndex = 0; valueIndex < value.Length; valueIndex++)
                 {
                     value[valueIndex] = pattern[valueIndex % pattern.Length];
                 }
+
 
                 return new KeyValuePair<byte[], byte[]>(
                     Encoding.UTF8.GetBytes($"{prefix}:{index:0000}"),
@@ -504,6 +518,7 @@ public sealed class PantsCompressionCompatibilityTests
         var footerStart = bytes.Length - DiskFormat.SstFooterSize;
         var algorithms = new List<byte>();
         var cursor = 0;
+
         while (cursor < footerStart)
         {
             var payloadLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(cursor)));
@@ -512,6 +527,7 @@ public sealed class PantsCompressionCompatibilityTests
             algorithms.Add(bytes[blockEnd - SstBlockTrailerSize]);
             cursor = blockEnd;
         }
+
 
         Assert.Equal(footerStart, cursor);
         return algorithms;
@@ -522,10 +538,12 @@ public sealed class PantsCompressionCompatibilityTests
     {
         var rows = new List<KeyValuePair<byte[], byte[]>>();
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
+
         await foreach (var entry in scan)
         {
             rows.Add(new KeyValuePair<byte[], byte[]>(entry.Key.ToArray(), entry.Value.ToArray()));
         }
+
 
         return rows;
     }
@@ -534,6 +552,7 @@ public sealed class PantsCompressionCompatibilityTests
     {
         using var canonical = new MemoryStream();
         Span<byte> length = stackalloc byte[sizeof(uint)];
+
         foreach (var record in records)
         {
             BinaryPrimitives.WriteUInt32LittleEndian(length, checked((uint)record.Key.Length));
@@ -544,16 +563,19 @@ public sealed class PantsCompressionCompatibilityTests
             canonical.Write(record.Value);
         }
 
+
         return XxHash3.HashToUInt64(canonical.ToArray());
     }
 
     static string FlattenExceptionMessages(Exception exception)
     {
         var messages = new List<string>();
+
         for (var current = exception; current is not null; current = current.InnerException!)
         {
             messages.Add(current.Message);
         }
+
 
         return string.Join(" | ", messages);
     }

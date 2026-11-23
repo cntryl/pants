@@ -55,6 +55,7 @@ public sealed class PantsRecoveryInventoryWorkTests
         var hydration = ProviderCloudPersistence.HydrateLocalCacheAsync(directory.Path,
             new ScriptedCloudObjectStore(), heads, control, PantsRecoveryPolicy.Strict,
             static _ => ValueTask.CompletedTask, CancellationToken.None, recoveryWork: sink).AsTask();
+
         try
         {
             await entered.Task.WaitAsync(TestTimeouts.Expected);
@@ -64,6 +65,7 @@ public sealed class PantsRecoveryInventoryWorkTests
         {
             release.TrySetResult();
         }
+
 
         if (outcome != "success")
         {
@@ -92,15 +94,25 @@ public sealed class PantsRecoveryInventoryWorkTests
         public ValueTask<CloudObject?> GetAsync(string objectKey, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
-        public ValueTask<bool> PutAsync(string objectKey, ReadOnlyMemory<byte> data,
-            CloudObjectWriteCondition condition, CancellationToken cancellationToken) =>
+        public ValueTask<bool> PutAsync(
+            string objectKey,
+            ReadOnlyMemory<byte> data,
+            CloudObjectWriteCondition condition,
+            CancellationToken cancellationToken
+        ) =>
             throw new NotSupportedException();
 
-        public ValueTask<CloudObjectListPage> ListPageAsync(string prefix, string? continuationToken,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
+        public ValueTask<CloudObjectListPage> ListPageAsync(
+            string prefix,
+            string? continuationToken,
+            CancellationToken cancellationToken
+        ) => throw new NotSupportedException();
 
-        public ValueTask<CloudObjectDeleteOutcome> DeleteAsync(string objectKey,
-            CloudObjectDeleteCondition condition, CancellationToken cancellationToken) =>
+        public ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
+            string objectKey,
+            CloudObjectDeleteCondition condition,
+            CancellationToken cancellationToken
+        ) =>
             throw new NotSupportedException();
     }
 }

@@ -5,5 +5,6 @@ interface IAsyncSstEvictionVerifier
     ValueTask VerifyRemoteSstForEvictionAsync(
         FileMeta file,
         long localLength,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }

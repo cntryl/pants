@@ -12,7 +12,8 @@ static class CloudObjectStoreExtensions
         this ICloudObjectStore objectStore,
         string objectKey,
         OperationDeadline deadline,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         deadline.RunAsync(
             token => objectStore.GetAsync(objectKey, token),
             cancellationToken);
@@ -23,7 +24,8 @@ static class CloudObjectStoreExtensions
         ulong offset,
         int length,
         OperationDeadline deadline,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         deadline.RunAsync(
             token => objectStore.GetRangeAsync(objectKey, offset, length, token),
             cancellationToken);
@@ -32,7 +34,8 @@ static class CloudObjectStoreExtensions
         this ICloudObjectStore objectStore,
         string objectKey,
         OperationDeadline deadline,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         deadline.RunAsync(
             token => objectStore.HeadAsync(objectKey, token),
             cancellationToken);
@@ -43,7 +46,8 @@ static class CloudObjectStoreExtensions
         ReadOnlyMemory<byte> data,
         CloudObjectWriteCondition condition,
         OperationDeadline deadline,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         deadline.RunMutationAsync(
             token => objectStore.PutAsync(objectKey, data, condition, token),
             cancellationToken);
@@ -53,7 +57,8 @@ static class CloudObjectStoreExtensions
         string prefix,
         string? continuationToken,
         OperationDeadline deadline,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         deadline.RunAsync(
             token => objectStore.ListPageAsync(prefix, continuationToken, token),
             cancellationToken);
@@ -63,7 +68,8 @@ static class CloudObjectStoreExtensions
         string objectKey,
         CloudObjectDeleteCondition condition,
         OperationDeadline deadline,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         deadline.RunMutationAsync(
             token => objectStore.DeleteAsync(objectKey, condition, token),
             cancellationToken);
@@ -71,7 +77,8 @@ static class CloudObjectStoreExtensions
     public static async ValueTask<IReadOnlyList<string>> ListAllAsync(
         this ICloudObjectStore objectStore,
         string prefix,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(objectStore);
         ArgumentNullException.ThrowIfNull(prefix);
@@ -92,11 +99,13 @@ static class CloudObjectStoreExtensions
                 prefix,
                 continuationToken,
                 cancellationToken).ConfigureAwait(false);
+
             if (page.ObjectKeys.Count > MaximumListItems - objectKeys.Count)
             {
                 throw new PantsInternalException(
                     $"Cloud LIST item count exceeded limit of {MaximumListItems}.");
             }
+
 
             foreach (var objectKey in page.ObjectKeys)
             {
@@ -107,14 +116,17 @@ static class CloudObjectStoreExtensions
             continuationToken = string.IsNullOrEmpty(page.ContinuationToken)
                 ? null
                 : page.ContinuationToken;
+
             if (continuationToken is null)
             {
                 return objectKeys.ToArray();
             }
 
+
             aggregateBytes = AddBytes(
                 aggregateBytes,
                 Encoding.UTF8.GetByteCount(continuationToken));
+
             if (!continuationTokens.Add(continuationToken))
             {
                 throw new PantsInternalException(
@@ -127,7 +139,8 @@ static class CloudObjectStoreExtensions
         this ICloudObjectStore objectStore,
         string prefix,
         OperationDeadline deadline,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(objectStore);
         ArgumentNullException.ThrowIfNull(prefix);
@@ -149,11 +162,13 @@ static class CloudObjectStoreExtensions
                 continuationToken,
                 deadline,
                 cancellationToken).ConfigureAwait(false);
+
             if (page.ObjectKeys.Count > MaximumListItems - objectKeys.Count)
             {
                 throw new PantsInternalException(
                     $"Cloud LIST item count exceeded limit of {MaximumListItems}.");
             }
+
 
             foreach (var objectKey in page.ObjectKeys)
             {
@@ -164,14 +179,17 @@ static class CloudObjectStoreExtensions
             continuationToken = string.IsNullOrEmpty(page.ContinuationToken)
                 ? null
                 : page.ContinuationToken;
+
             if (continuationToken is null)
             {
                 return objectKeys.ToArray();
             }
 
+
             aggregateBytes = AddBytes(
                 aggregateBytes,
                 Encoding.UTF8.GetByteCount(continuationToken));
+
             if (!continuationTokens.Add(continuationToken))
             {
                 throw new PantsInternalException("Cloud LIST repeated continuation token.");
@@ -182,6 +200,7 @@ static class CloudObjectStoreExtensions
     static int AddBytes(int current, int additional)
     {
         var combined = 0;
+
         try
         {
             combined = checked(current + additional);
@@ -192,6 +211,7 @@ static class CloudObjectStoreExtensions
                 "Cloud LIST aggregate byte count overflowed its safety counter.",
                 exception);
         }
+
 
         return combined <= MaximumListBytes
             ? combined

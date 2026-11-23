@@ -122,12 +122,14 @@ public sealed class PantsLeaseAlignmentBehaviorTests
         await probe.AmbiguousPut.Task.WaitAsync(TestTimeouts.Expected);
 
         await lost.Task.WaitAsync(TestTimeouts.Expected);
+
         if (deferred)
         {
             await probe.LatePutApplied.Task.WaitAsync(TestTimeouts.Expected);
             await WaitUntilAsync(() => monotonic.HasTimerDueIn(TimeSpan.FromMilliseconds(50)));
             Advance(monotonic, wall, TimeSpan.FromMilliseconds(50));
         }
+
 
         Assert.False(database.PersistentStorage!.IsPrimaryLeaseHealthy);
         await Assert.ThrowsAsync<PantsFencedException>(() => WriteAsync(database, "refused"));
@@ -202,6 +204,7 @@ public sealed class PantsLeaseAlignmentBehaviorTests
         probe.BeforeNextLeaseRead = async token =>
         {
             entered.TrySetResult();
+
             try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
             finally { canceled.TrySetResult(); }
         };
@@ -242,6 +245,7 @@ public sealed class PantsLeaseAlignmentBehaviorTests
         probe.BeforeNextLeasePut = async token =>
         {
             entered.TrySetResult();
+
             try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
             finally { canceled.TrySetResult(); }
         };
@@ -284,6 +288,7 @@ public sealed class PantsLeaseAlignmentBehaviorTests
         {
             await WriteAsync(first, "acknowledged", backend == 0 ? PantsWriteOptions.Sync : PantsWriteOptions.CloudStrict);
             wall.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(40);
+
             if (backend == 0)
             {
                 var before = await File.ReadAllBytesAsync(Path.Combine(directory.Path, ".midge_leader"));
@@ -321,18 +326,22 @@ public sealed class PantsLeaseAlignmentBehaviorTests
                 await Assert.ThrowsAsync<PantsFencedException>(() => WriteAsync(first, "refused"));
                 await WriteAsync(successor, "successor-write");
             }
+
             Assert.Equal(1, Volatile.Read(ref losses));
         }
+
         if (backend == 0)
         {
             // Local release is best effort while the fenced predecessor is releasing its mutation guard.
             // Recover after a normal stale-record boundary even if that release retained the record.
             wall.UtcNow += TimeSpan.FromSeconds(46);
         }
+
         await using var reopened = await PantsDatabase.OpenForTestingAsync(options, dependencies);
         await using var read = await reopened.Transactions.BeginAsync(reopened.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
         Assert.Equal("value"u8.ToArray(), (await read.GetAsync("acknowledged"u8.ToArray()))?.ToArray());
         Assert.Null(await read.GetAsync("refused"u8.ToArray()));
+
         if (backend == 2)
         {
             Assert.Equal("value"u8.ToArray(), (await read.GetAsync("successor-write"u8.ToArray()))?.ToArray());
@@ -361,6 +370,7 @@ public sealed class PantsLeaseAlignmentBehaviorTests
         store.Arm();
         Advance(time, clock, TimeSpan.FromSeconds(10));
         await store.Applied.Task.WaitAsync(TestTimeouts.Expected);
+
         try
         {
             Advance(time, clock, TimeSpan.FromSeconds(3));
@@ -374,6 +384,7 @@ public sealed class PantsLeaseAlignmentBehaviorTests
         {
             store.Release();
         }
+
         await store.Expired.Task.WaitAsync(TestTimeouts.Expected);
         var record = await new CloudObjectLeaseStore(store, PantsCloudObjectLayout.LeaseObjectKey).ReadAsync(CancellationToken.None);
         Assert.NotNull(record);
@@ -430,6 +441,7 @@ public sealed class PantsLeaseAlignmentBehaviorTests
         public async ValueTask<bool> PutAsync(string key, ReadOnlyMemory<byte> data, CloudObjectWriteCondition condition, CancellationToken token)
         {
             var applied = await _inner.PutAsync(key, data, condition, token);
+
             if (key == PantsCloudObjectLayout.LeaseObjectKey && condition is CloudObjectWriteCondition.IfVersion && applied)
             {
                 if (Interlocked.Exchange(ref _armed, 0) != 0)
@@ -442,6 +454,7 @@ public sealed class PantsLeaseAlignmentBehaviorTests
                     Expired.TrySetResult();
                 }
             }
+
             return applied;
         }
     }
@@ -470,44 +483,57 @@ public sealed class PantsLeaseAlignmentBehaviorTests
             {
                 return await base.SendAsync(request, cancellationToken);
             }
+
             if (request.Method == HttpMethod.Get)
             {
                 var before = BeforeNextLeaseRead;
                 BeforeNextLeaseRead = null;
+
                 if (before is not null) { await before(cancellationToken); }
+
                 if (PutRejected.Task.IsCompleted)
                 {
                     Interlocked.Increment(ref ReadsAfterRejection);
                 }
+
                 if (FailNextLeaseRead)
                 {
                     FailNextLeaseRead = false;
                     ReadFailed.TrySetResult();
+
                     if (RawIoReadFailure) { throw new IOException("Injected raw provider lease GET callback error."); }
+
                     throw new PantsIOException("Injected transient lease GET callback failure.");
                 }
             }
+
             if (request.Method == HttpMethod.Put && BeforeNextLeasePut is { } beforePut)
             {
                 BeforeNextLeasePut = null;
                 await beforePut(cancellationToken);
             }
+
             if (request.Method == HttpMethod.Put && DeferNextLeasePutUntilReadback)
             {
                 DeferNextLeasePutUntilReadback = false;
                 _deferredPut = new HttpRequestMessage(request.Method, request.RequestUri);
+
                 foreach (var header in request.Headers) { _deferredPut.Headers.TryAddWithoutValidation(header.Key, header.Value); }
+
                 _deferredPut.Content = new ByteArrayContent(await request.Content!.ReadAsByteArrayAsync(cancellationToken));
                 AmbiguousPut.TrySetResult();
                 throw new PantsIOException("Injected lost response before a delayed conditional renewal effect.");
             }
+
             if (request.Method == HttpMethod.Put && RejectNextLeasePut)
             {
                 RejectNextLeasePut = false;
                 PutRejected.TrySetResult();
                 return ProviderPreconditionResponses.Azure();
             }
+
             var response = await base.SendAsync(request, cancellationToken);
+
             if (request.Method == HttpMethod.Get && _deferredPut is { } deferredPut)
             {
                 _deferredPut = null;
@@ -518,6 +544,8 @@ public sealed class PantsLeaseAlignmentBehaviorTests
                 }
                 LatePutApplied.TrySetResult();
             }
+
+
             if (request.Method == HttpMethod.Put && request.Headers.IfMatch.Count != 0)
             {
                 if (FailNextLeasePutAfterPersisting)
@@ -527,12 +555,16 @@ public sealed class PantsLeaseAlignmentBehaviorTests
                     AmbiguousPut.TrySetResult();
                     throw new PantsIOException("Injected lost renewal response after conditional persistence.");
                 }
+
+
                 if (AmbiguousPut.Task.IsCompleted)
                 {
                     ExpiredPut.TrySetResult();
                 }
+
                 PutSucceeded.TrySetResult();
             }
+
             return response;
         }
     }

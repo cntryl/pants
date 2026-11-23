@@ -28,16 +28,19 @@ sealed class SpillRunRetirement
     /// </summary>
     public void Retire(
         IReadOnlyList<string> paths,
-        IReadOnlyList<StorageBudgetLedger.StorageReservation> reservations)
+        IReadOnlyList<StorageBudgetLedger.StorageReservation> reservations
+    )
     {
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(reservations);
         var remaining = RemoveAll(paths);
+
         if (remaining.Count == 0)
         {
             ReleaseAll(reservations);
             return;
         }
+
 
         lock (_gate)
         {
@@ -65,6 +68,7 @@ sealed class SpillRunRetirement
         foreach (var entry in snapshot)
         {
             var remaining = RemoveAll(entry.Paths);
+
             if (remaining.Count != 0)
             {
                 lock (_gate)
@@ -74,6 +78,7 @@ sealed class SpillRunRetirement
 
                 continue;
             }
+
 
             var removed = false;
             lock (_gate)
@@ -91,6 +96,7 @@ sealed class SpillRunRetirement
     List<string> RemoveAll(IReadOnlyList<string> paths)
     {
         var remaining = new List<string>();
+
         foreach (var path in paths)
         {
             try
@@ -103,6 +109,7 @@ sealed class SpillRunRetirement
                 remaining.Add(path);
             }
         }
+
 
         return remaining;
     }

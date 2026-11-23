@@ -121,6 +121,7 @@ public sealed class ProviderCloudPartialCompactionPublicationTests
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < FlushCount * EntriesPerFlush; index++)
         {
             var value = Assert.IsType<ReadOnlyMemory<byte>>(
@@ -174,10 +175,12 @@ public sealed class ProviderCloudPartialCompactionPublicationTests
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             var isSstPut = request.Method == HttpMethod.Put &&
                            request.RequestUri?.AbsolutePath.Contains("/sst/", StringComparison.Ordinal) == true;
+
             if (isSstPut && Volatile.Read(ref _armed) != 0 &&
                 Interlocked.Increment(ref _sstPutAttempts) == 2)
             {
@@ -186,6 +189,7 @@ public sealed class ProviderCloudPartialCompactionPublicationTests
                     Content = new StringContent("<Error><Code>InternalError</Code></Error>")
                 });
             }
+
 
             return base.SendAsync(request, cancellationToken);
         }

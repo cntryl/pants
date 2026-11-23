@@ -109,10 +109,12 @@ public sealed class PantsRuntimeMetricsCancellationContractTests
             {
                 using var deadline = new CancellationTokenSource();
                 var request = database.Diagnostics.GetRuntimeMetricsAsync(deadline.Token).AsTask();
+
                 if (attempt == 0)
                 {
                     await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
                 }
+
 
                 deadline.CancelAfter(TimeSpan.FromMilliseconds(100));
                 await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request.WaitAsync(TestTimeouts.Expected));

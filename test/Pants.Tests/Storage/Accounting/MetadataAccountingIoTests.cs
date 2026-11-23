@@ -47,16 +47,19 @@ public sealed class MetadataAccountingIoTests
             {
                 AtomicStagedFile.FlushDirectory(parent);
                 entered.Set();
+
                 if (!release.Wait(TestTimeouts.Expected))
                 {
                     throw new TimeoutException("directory barrier was not released");
                 }
+
 
                 if (error)
                 {
                     throw failure;
                 }
             }));
+
         try
         {
             Assert.True(entered.Wait(TestTimeouts.Expected));
@@ -67,6 +70,7 @@ public sealed class MetadataAccountingIoTests
         {
             release.Set();
         }
+
 
         if (error)
         {
@@ -128,13 +132,16 @@ public sealed class MetadataAccountingIoTests
             {
                 RandomAccess.Write(file, buffers, offset);
                 entered.Set();
+
                 if (!release.Wait(TestTimeouts.Expected))
                 {
                     throw new TimeoutException("held write was not released");
                 }
 
+
                 throw failure;
             }));
+
         try
         {
             Assert.True(entered.Wait(TestTimeouts.Expected));
@@ -145,6 +152,7 @@ public sealed class MetadataAccountingIoTests
         {
             release.Set();
         }
+
 
         Assert.Same(failure, await Assert.ThrowsAsync<IOException>(() => worker));
         Assert.Equal(payload, File.ReadAllBytes(path));

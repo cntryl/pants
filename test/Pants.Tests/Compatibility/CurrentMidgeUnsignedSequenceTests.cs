@@ -67,6 +67,7 @@ public sealed class CurrentMidgeUnsignedSequenceTests
 
         var report = await PantsDatabase.VerifyPathAsync(directory.Path);
         Assert.True(report.Authoritative);
+
         if (report.WalBoundary is { } boundary)
         {
             Assert.True(Convert.ToUInt64(boundary) > long.MaxValue);
@@ -81,10 +82,12 @@ public sealed class CurrentMidgeUnsignedSequenceTests
         Assert.Null(await read.GetAsync("engine-row"u8.ToArray()));
         await using var scan = await read.ScanAsync(new PantsScanQuery());
         var rows = new List<PantsEntry>();
+
         await foreach (var row in scan)
         {
             rows.Add(row);
         }
+
         var only = Assert.Single(rows);
         Assert.Equal("u64-row"u8.ToArray(), only.Key.ToArray());
         Assert.Equal("pants-extended"u8.ToArray(), only.Value.ToArray());
@@ -95,12 +98,14 @@ public sealed class CurrentMidgeUnsignedSequenceTests
         var directory = new TemporaryDirectory();
         var source = Path.Combine(AppContext.BaseDirectory, "Fixtures", "Compatibility", "Midge",
             "c684310d9d8ce8ecd1151c47151d4bea98b348cf", "unsigned-sequence-" + image);
+
         foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
         {
             var destination = Path.Combine(directory.Path, Path.GetRelativePath(source, file));
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
             File.Copy(file, destination);
         }
+
         return directory;
     }
 }

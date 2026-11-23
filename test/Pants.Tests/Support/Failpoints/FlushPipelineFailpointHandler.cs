@@ -34,10 +34,12 @@ sealed class FlushPipelineFailpointHandler(
         }
 
         _entered.TrySetResult();
+
         if (throwOnHit)
         {
             throw new IOException($"Injected failure at {failpoint}.");
         }
+
 
         if (!_release.Wait(MaximumBlockTime))
         {

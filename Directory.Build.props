@@ -15,4 +15,9 @@
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Cntryl.Conventions.Analyzers" PrivateAssets="all"/>
+    <PackageReference Include="Cntryl.Conventions.CodeFixes" PrivateAssets="all"/>
+  </ItemGroup>
 </Project>

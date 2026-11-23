@@ -44,21 +44,25 @@ static class CrashSoakSettings
         get
         {
             var listed = Environment.GetEnvironmentVariable(SeedsVariable);
+
             if (string.IsNullOrWhiteSpace(listed))
             {
                 var first = (int)(DateTimeOffset.UtcNow.ToUnixTimeSeconds() % 1_000_000_000);
                 return Enumerable.Range(first, 20).ToArray();
             }
 
+
             return listed
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .SelectMany(static part =>
                 {
                     var dash = part.IndexOf('-', 1);
+
                     if (dash < 0)
                     {
                         return [int.Parse(part, CultureInfo.InvariantCulture)];
                     }
+
 
                     var first = int.Parse(part.AsSpan(0, dash), CultureInfo.InvariantCulture);
                     var last = int.Parse(part.AsSpan(dash + 1), CultureInfo.InvariantCulture);

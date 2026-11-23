@@ -11,6 +11,7 @@ sealed class CloudHttpAttemptResponseContent : HttpContent
     {
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
         _recordBytes = recordBytes ?? throw new ArgumentNullException(nameof(recordBytes));
+
         foreach (var header in inner.Headers.NonValidated)
         {
             Headers.TryAddWithoutValidation(header.Key, header.Value);
@@ -29,7 +30,8 @@ sealed class CloudHttpAttemptResponseContent : HttpContent
     protected override async Task SerializeToStreamAsync(
         Stream stream,
         TransportContext? context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var observed = new CountingStream(stream, _recordBytes, canRead: false, canWrite: true, leaveOpen: true);
         await _inner.CopyToAsync(observed, context, cancellationToken).ConfigureAwait(false);
@@ -98,7 +100,8 @@ sealed class CloudHttpAttemptResponseContent : HttpContent
             byte[] buffer,
             int offset,
             int count,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             var read = await inner.ReadAsync(buffer.AsMemory(offset, count), cancellationToken).ConfigureAwait(false);
             Record(read);
@@ -107,7 +110,8 @@ sealed class CloudHttpAttemptResponseContent : HttpContent
 
         public override async ValueTask<int> ReadAsync(
             Memory<byte> buffer,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             var read = await inner.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
             Record(read);
@@ -130,7 +134,8 @@ sealed class CloudHttpAttemptResponseContent : HttpContent
             byte[] buffer,
             int offset,
             int count,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             Record(count);
             await inner.WriteAsync(buffer.AsMemory(offset, count), cancellationToken).ConfigureAwait(false);
@@ -138,7 +143,8 @@ sealed class CloudHttpAttemptResponseContent : HttpContent
 
         public override async ValueTask WriteAsync(
             ReadOnlyMemory<byte> buffer,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             Record(buffer.Length);
             await inner.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);

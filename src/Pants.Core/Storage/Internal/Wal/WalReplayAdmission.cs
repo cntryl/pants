@@ -29,11 +29,13 @@ static class WalReplayAdmission
                 : WalCodec.MeasureTransactionBatchOperation(operation.Key.Length, operation.Value?.Length,
                     operation.EndExclusive?.Length, operation.TimeToLive.HasValue || operation.ExpirationUnixMilliseconds.HasValue)));
         });
+
         if (!payload.IsSpilled)
         {
             WalCodec.RequireTransactionBatchPayloadFitsDecodedLimit(bytes);
             bytes = MeasureResident(bytes, (int)payload.Operations.Count);
         }
+
         RequireBytes(bytes, limit);
     }
 

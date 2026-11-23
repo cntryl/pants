@@ -32,7 +32,8 @@ static class CompactionTurnSelector
         ulong? snapshotHorizon,
         long? preferredWorkBytes,
         CompactionTurnMode mode,
-        IReadOnlySet<uint>? excludedFamilies = null)
+        IReadOnlySet<uint>? excludedFamilies = null
+    )
     {
         var floor = mode == CompactionTurnMode.Force ? 2 : int.MaxValue;
         var l0Floor = mode == CompactionTurnMode.DrainDebt ? 1 : floor;
@@ -43,6 +44,7 @@ static class CompactionTurnSelector
         foreach (var familyId in rotation)
         {
             var repair = LeveledCompactionPlanner.PickRepair(files, familyId, configuration);
+
             if (repair is not null)
             {
                 return repair;
@@ -53,6 +55,7 @@ static class CompactionTurnSelector
         {
             var plan = LeveledCompactionPlanner.PickCriticalL0(
                 files, familyId, configuration, snapshotHorizon, preferredWorkBytes);
+
             if (plan is not null)
             {
                 return plan;
@@ -60,15 +63,18 @@ static class CompactionTurnSelector
         }
 
         CompactionPlan? deepest = null;
+
         foreach (var familyId in rotation)
         {
             var plan = LeveledCompactionPlanner.PickInnerLevel(
                 files, familyId, configuration, snapshotHorizon, floor, preferredWorkBytes);
+
             if (plan is not null && (deepest is null || plan.SourceLevel > deepest.SourceLevel))
             {
                 deepest = plan;
             }
         }
+
 
         if (deepest is not null)
         {
@@ -79,6 +85,7 @@ static class CompactionTurnSelector
         {
             var plan = LeveledCompactionPlanner.PickSoftL0(
                 files, familyId, configuration, snapshotHorizon, l0Floor);
+
             if (plan is not null)
             {
                 return plan;

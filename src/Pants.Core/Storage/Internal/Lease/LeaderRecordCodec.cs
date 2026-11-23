@@ -26,6 +26,7 @@ static class LeaderRecordCodec
     public static LeaderRecord Decode(ReadOnlySpan<byte> bytes)
     {
         string content;
+
         try
         {
             // No BOM stripping and no replacement characters: the record is exactly UTF-8.
@@ -38,11 +39,14 @@ static class LeaderRecordCodec
                 exception);
         }
 
+
         var fields = new Dictionary<string, string>(StringComparer.Ordinal);
+
         foreach (var rawLine in content.Split('\n'))
         {
             var line = rawLine.EndsWith('\r') ? rawLine[..^1] : rawLine;
             var separator = line.IndexOf(": ", StringComparison.Ordinal);
+
             if (separator >= 0)
             {
                 // Last-occurrence-wins per format/lease.md §7: a duplicate field is resolved,
@@ -50,6 +54,7 @@ static class LeaderRecordCodec
                 fields[line[..separator]] = line[(separator + 2)..];
             }
         }
+
 
         if (!(fields.TryGetValue(EpochField, out var epochRaw) &&
               TryParseDecimal(epochRaw, out ulong epoch) &&

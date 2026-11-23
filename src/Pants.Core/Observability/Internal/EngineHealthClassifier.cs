@@ -4,7 +4,8 @@ static class EngineHealthClassifier
 {
     public static PantsEngineHealth Classify(
         PantsEngineHealth storageHealth,
-        bool writeStalled) =>
+        bool writeStalled
+    ) =>
         storageHealth switch
         {
             PantsEngineHealth.SalvageMode => PantsEngineHealth.SalvageMode,

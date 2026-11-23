@@ -11,10 +11,12 @@ sealed class ProviderWalCatalogConverter : JsonConverter<ProviderWalCatalog>
         using var document = JsonDocument.ParseValue(ref reader);
         var root = document.RootElement;
         var version = root.GetProperty("format_version").GetUInt32();
+
         if (version != 3)
         {
             throw new PantsCompatibilityException($"Cloud WAL catalog version {version} is unsupported.");
         }
+
 
         RequireFields(root, "format_version", "fencing_epoch", "anchor", "next_segment_id", "seq_floor", "retired_by", "segments");
         var epoch = root.GetProperty("fencing_epoch").GetUInt64();
@@ -24,6 +26,7 @@ sealed class ProviderWalCatalogConverter : JsonConverter<ProviderWalCatalog>
         var segments = new SortedDictionary<ulong, ProviderPublishedWalSegment>();
         var previous = anchor;
         var previousEpoch = 0UL;
+
         foreach (var entry in root.GetProperty("segments").EnumerateArray())
         {
             RequireFields(entry, "epoch", "prev", "facts", "size_bytes", "crc32c");
@@ -34,6 +37,7 @@ sealed class ProviderWalCatalogConverter : JsonConverter<ProviderWalCatalog>
             _ = ReadLink(factsElement.GetProperty("link"));
             var facts = factsElement.Deserialize<WalSealedFacts>(WalLedgerStore.JsonOptions)!;
             var size = entry.GetProperty("size_bytes").GetUInt64();
+
             if (!prev.Matches(previous) || facts.Link.Id <= previous.Id || facts.Link.LastSeq <= previous.LastSeq ||
                 entryEpoch < previousEpoch || entryEpoch > epoch || facts.RecordCount == 0 ||
                 facts.DataLen < 128 || facts.DataLen >= size || facts.MaxSeqPerCf is null || facts.MaxSeqPerCf.Length == 0 ||
@@ -42,8 +46,10 @@ sealed class ProviderWalCatalogConverter : JsonConverter<ProviderWalCatalog>
                 throw new PantsCorruptionException("Cloud WAL catalog chain is invalid.");
             }
 
+
             ulong? lastFamily = null;
             ulong max = 0;
+
             foreach (var row in facts.MaxSeqPerCf)
             {
                 if (row is null || row.Length != 2 || row[0] > uint.MaxValue || (lastFamily.HasValue && row[0] <= lastFamily.Value) ||
@@ -55,6 +61,7 @@ sealed class ProviderWalCatalogConverter : JsonConverter<ProviderWalCatalog>
                 lastFamily = row[0];
                 max = Math.Max(max, row[1]);
             }
+
 
             if (max != facts.Link.LastSeq)
             {
@@ -75,6 +82,7 @@ sealed class ProviderWalCatalogConverter : JsonConverter<ProviderWalCatalog>
             previous = facts.Link;
             previousEpoch = entryEpoch;
         }
+
 
         if (epoch == 0 || next <= previous.Id || anchor.Id == 0 && !anchor.Matches(WalChainLink.Genesis) ||
             (anchor.Matches(WalChainLink.Genesis) != (retiredBy == 0)))
@@ -98,10 +106,12 @@ sealed class ProviderWalCatalogConverter : JsonConverter<ProviderWalCatalog>
     {
         RequireFields(value, "id", "last_seq", "digest");
         var link = value.Deserialize<WalChainLink>(WalLedgerStore.JsonOptions)!;
+
         if (link.Digest is not { Length: 16 })
         {
             throw new JsonException("A WAL catalog link must contain a 16-byte digest.");
         }
+
 
         return link;
     }
@@ -114,6 +124,7 @@ sealed class ProviderWalCatalogConverter : JsonConverter<ProviderWalCatalog>
         }
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var property in value.EnumerateObject())
         {
             if (!fields.Contains(property.Name) || !seen.Add(property.Name))
@@ -121,6 +132,7 @@ sealed class ProviderWalCatalogConverter : JsonConverter<ProviderWalCatalog>
                 throw new JsonException("A WAL catalog structure contains an unknown or duplicate field.");
             }
         }
+
 
         if (seen.Count != fields.Length)
         {
@@ -139,6 +151,7 @@ sealed class ProviderWalCatalogConverter : JsonConverter<ProviderWalCatalog>
         writer.WriteNumber("seq_floor", value.SequenceFloor);
         writer.WriteNumber("retired_by", value.RetiredBy);
         writer.WriteStartArray("segments");
+
         foreach (var segment in value.Segments.Values)
         {
             if (segment.Facts is null || segment.Previous is null)
@@ -156,6 +169,7 @@ sealed class ProviderWalCatalogConverter : JsonConverter<ProviderWalCatalog>
             writer.WriteNumber("crc32c", segment.ContentCrc32C);
             writer.WriteEndObject();
         }
+
 
         writer.WriteEndArray();
         writer.WriteEndObject();

@@ -20,17 +20,20 @@ static class CloudDdlEdit
 
     public static void Apply(
         List<CloudDdlColumnFamily> columnFamilies,
-        JsonElement edit)
+        JsonElement edit
+    )
     {
         Validate(edit);
         var variant = GetVariant(edit);
         var value = variant.Value;
         var id = GetRequiredUInt32(value, "id");
+
         if (variant.Name == "CreateColumnFamily")
         {
             var name = GetRequiredString(value, "name");
             var createdAt = GetRequiredUInt64(value, "created_at");
             var existing = columnFamilies.SingleOrDefault(family => family.Id == id);
+
             if (existing is null)
             {
                 columnFamilies.Add(new CloudDdlColumnFamily
@@ -50,15 +53,19 @@ static class CloudDdlEdit
                 existing.Reclaimed = false;
             }
 
+
             return;
         }
 
+
         var family = columnFamilies.SingleOrDefault(candidate =>
             candidate.Id == id && !candidate.DeletedAt.HasValue);
+
         if (family is null)
         {
             return;
         }
+
 
         family.DeletedAt = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         family.DropSequence = variant.Name == "DropColumnFamilyAt"
@@ -73,7 +80,8 @@ static class CloudDdlEdit
 
     public static bool Matches(
         IReadOnlyList<ColumnFamilyMeta> columnFamilies,
-        JsonElement edit)
+        JsonElement edit
+    )
     {
         Validate(edit);
         var variant = GetVariant(edit);
@@ -111,16 +119,20 @@ static class CloudDdlEdit
         }
 
         using var properties = edit.EnumerateObject();
+
         if (!properties.MoveNext())
         {
             throw new JsonException("The cloud DDL edit must contain exactly one variant.");
         }
 
+
         var variant = properties.Current;
+
         if (properties.MoveNext() || variant.Value.ValueKind != JsonValueKind.Object)
         {
             throw new JsonException("The cloud DDL edit must contain exactly one object variant.");
         }
+
 
         return variant;
     }

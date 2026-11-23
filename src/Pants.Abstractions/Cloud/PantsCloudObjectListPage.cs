@@ -4,7 +4,8 @@ public sealed record PantsCloudObjectListPage
 {
     public PantsCloudObjectListPage(
         IEnumerable<string> objectKeys,
-        string? continuationToken)
+        string? continuationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(objectKeys);
         ObjectKeys = Array.AsReadOnly(objectKeys.ToArray());

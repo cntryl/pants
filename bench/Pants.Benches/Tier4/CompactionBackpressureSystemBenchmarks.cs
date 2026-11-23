@@ -28,6 +28,7 @@ public class CompactionBackpressureSystemBenchmarks : Tier4Benchmark
     public async Task WriteWhileCompactingAsync()
     {
         var compaction = _database.Maintenance.CompactAllAsync().AsTask();
+
         for (var batch = 0; batch < BatchCount; batch++)
         {
             var entries = Enumerable.Range(0, BatchSize).Select(offset =>
@@ -35,6 +36,7 @@ public class CompactionBackpressureSystemBenchmarks : Tier4Benchmark
                 var index = batch * BatchSize + offset;
                 return (Tier4Data.Key(index), Tier4Data.Value(512, index));
             });
+
             while (true)
             {
                 try
@@ -50,6 +52,7 @@ public class CompactionBackpressureSystemBenchmarks : Tier4Benchmark
                 }
             }
         }
+
 
         await compaction;
         await _database.Maintenance.WaitForWriteStallClearAsync(_database.ColumnFamilies.DefaultFamily,

@@ -31,10 +31,12 @@ static class BenchmarkEnvironment
     static string ReadCpu()
     {
         var configured = Environment.GetEnvironmentVariable("PANTS_BENCH_CPU");
+
         if (!string.IsNullOrWhiteSpace(configured))
         {
             return configured.Trim();
         }
+
 
         if (OperatingSystem.IsMacOS())
         {
@@ -45,6 +47,7 @@ static class BenchmarkEnvironment
         {
             var modelLine = File.ReadLines("/proc/cpuinfo")
                 .FirstOrDefault(line => line.StartsWith("model name", StringComparison.OrdinalIgnoreCase));
+
             if (modelLine is not null)
             {
                 return modelLine.Split(':', 2)[1].Trim();
@@ -66,11 +69,13 @@ static class BenchmarkEnvironment
         var output = process.StandardOutput.ReadToEnd();
         var error = process.StandardError.ReadToEnd();
         process.WaitForExit();
+
         if (process.ExitCode != 0 || (!allowEmptyOutput && string.IsNullOrWhiteSpace(output)))
         {
             throw new InvalidOperationException(
                 $"'{fileName} {arguments}' failed with exit code {process.ExitCode}: {error.Trim()}");
         }
+
 
         return output.Trim();
     }

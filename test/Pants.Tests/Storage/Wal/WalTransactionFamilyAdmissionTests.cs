@@ -50,8 +50,11 @@ public sealed class WalTransactionFamilyAdmissionTests
         Assert.Null(await defaultReader.GetAsync("illegal-a"u8.ToArray()));
     }
 
-    static CommitPayload Payload(RuntimeState state, long transactionId,
-        params (ColumnFamilyIdentity Family, string Key)[] entries)
+    static CommitPayload Payload(
+        RuntimeState state,
+        long transactionId,
+        params (ColumnFamilyIdentity Family, string Key)[] entries
+    )
     {
         var operations = entries.Select((entry, index) => new TransactionIntentOperation(checked((ulong)index),
             CommitOperationKind.Put, entry.Family, TestBytes.FromString(entry.Key), null,

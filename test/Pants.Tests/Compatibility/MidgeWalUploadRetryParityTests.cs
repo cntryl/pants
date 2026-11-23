@@ -31,10 +31,12 @@ public sealed class MidgeWalUploadRetryParityTests
         {
             var firstSegmentId = checked((ulong)(await database.Diagnostics.GetRuntimeMetricsAsync()).WalCurrentSegmentId);
             handler.FailWalSegmentWrites(firstSegmentId, attempts: 3);
+
             for (var index = 0; index < 6; index++)
             {
                 await CommitCloudAsyncAsync(database, TestBytes.FromString($"midge-key-{index}"));
             }
+
 
             using (var timeout = new CancellationTokenSource(TestTimeouts.Expected))
             {

@@ -29,20 +29,26 @@ sealed class ProviderCloudControlMetadataReadSet(
 
     public async ValueTask<CloudObject?> ReadAsync(
         string objectKey,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
         if (_store is SimulatedCloudObjectStore simulated)
         {
             return ReadSimulatedControlMetadata(simulated, objectKey, cancellationToken);
         }
+
         var metadata = await _store.HeadAsync(objectKey, cancellationToken).ConfigureAwait(false);
+
         if (metadata is null)
         {
             return null;
         }
 
+
         IDisposable? reservation = ReserveWorkspace(metadata.SizeBytes, objectKey);
+
         try
         {
             metadataAdmitted?.Invoke();
@@ -64,9 +70,11 @@ sealed class ProviderCloudControlMetadataReadSet(
     CloudObject? ReadSimulatedControlMetadata(
         SimulatedCloudObjectStore simulated,
         string objectKey,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         IDisposable? reservation = null;
+
         try
         {
             var value = simulated.ReadControlMetadata(objectKey,
@@ -76,15 +84,18 @@ sealed class ProviderCloudControlMetadataReadSet(
                     metadataAdmitted?.Invoke();
                 },
                 cancellationToken);
+
             if (value is not null)
             {
                 if (!value.Data.IsEmpty)
                 {
                     recoveryWork?.Record(new RecoveryWorkCompleted("remote_read", value.Data.Length, 0, 0));
                 }
+
                 Retain(reservation!);
                 reservation = null;
             }
+
             return value;
         }
         finally
@@ -102,12 +113,14 @@ sealed class ProviderCloudControlMetadataReadSet(
         }
 
         var workspaceBytes = GetWorkspaceBytes(sizeBytes, objectKey);
+
         if (workspaceBytes > _budget.Limit)
         {
             throw new PantsResourceLimitException(
                 $"Reading cloud control object '{objectKey}' needs {workspaceBytes} bytes of " +
                 $"maintenance memory; the pool holds {_budget.Limit}.");
         }
+
         return _budget.Reserve(workspaceBytes);
     }
 
@@ -151,13 +164,16 @@ sealed class ProviderCloudControlMetadataReadSet(
     async ValueTask<CloudObject> ReadRangesAsync(
         string objectKey,
         CloudObjectMetadata metadata,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var bytes = GC.AllocateUninitializedArray<byte>(checked((int)metadata.SizeBytes));
+
         for (var offset = 0; offset < bytes.Length;)
         {
             var length = Math.Min(ReadRangeBytes, bytes.Length - offset);
             CloudObject? range;
+
             try
             {
                 range = _store is CloudObjectStore builtInStore
@@ -189,6 +205,7 @@ sealed class ProviderCloudControlMetadataReadSet(
                     .ConfigureAwait(false);
             }
 
+
             if (range is null || !StringComparer.Ordinal.Equals(range.Version, metadata.Version))
             {
                 throw new PantsBusyException(
@@ -206,13 +223,15 @@ sealed class ProviderCloudControlMetadataReadSet(
             recoveryWork?.Record(new RecoveryWorkCompleted("remote_read", length, 0, 0));
         }
 
+
         return new CloudObject(bytes, metadata.Version);
     }
 
     async ValueTask<CloudObject> ReadWholeObjectAsync(
         string objectKey,
         CloudObjectMetadata metadata,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (metadata.SizeBytes > MaximumWholeObjectBytes)
         {
@@ -222,11 +241,13 @@ sealed class ProviderCloudControlMetadataReadSet(
         }
 
         var value = await _store.GetAsync(objectKey, cancellationToken).ConfigureAwait(false);
+
         if (value is null || !StringComparer.Ordinal.Equals(value.Version, metadata.Version))
         {
             throw new PantsBusyException(
                 $"Cloud control object '{objectKey}' changed during a bounded read.");
         }
+
 
         if (checked((ulong)value.Data.Length) != metadata.SizeBytes)
         {
@@ -234,10 +255,12 @@ sealed class ProviderCloudControlMetadataReadSet(
                 $"Cloud control object '{objectKey}' did not return its declared size.");
         }
 
+
         if (!value.Data.IsEmpty)
         {
             recoveryWork?.Record(new RecoveryWorkCompleted("remote_read", value.Data.Length, 0, 0));
         }
+
         return value;
     }
 
@@ -272,10 +295,12 @@ sealed class ProviderCloudControlMetadataReadSet(
         public void Dispose()
         {
             var current = Interlocked.Exchange(ref _reservations, null);
+
             if (current is null)
             {
                 return;
             }
+
 
             foreach (var reservation in current)
             {

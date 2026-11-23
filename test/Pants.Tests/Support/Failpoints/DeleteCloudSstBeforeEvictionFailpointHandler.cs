@@ -17,10 +17,12 @@ sealed class DeleteCloudSstBeforeEvictionFailpointHandler(string databasePath) :
         }
 
         var cloudSstDirectory = Path.Combine(databasePath, "cloud_store", "sst");
+
         if (!Directory.Exists(cloudSstDirectory))
         {
             return;
         }
+
 
         foreach (var path in Directory.EnumerateFiles(
                      cloudSstDirectory,

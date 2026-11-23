@@ -16,7 +16,8 @@ sealed class TransactionIntentResidentKeyCursor : IEnumerator<byte[]>
         TransactionIntentOperation[] operations,
         byte[]? startInclusive,
         byte[]? endExclusive,
-        PantsScanDirection direction)
+        PantsScanDirection direction
+    )
     {
         _operations = operations;
         _startInclusive = startInclusive;
@@ -32,6 +33,7 @@ sealed class TransactionIntentResidentKeyCursor : IEnumerator<byte[]>
     public bool MoveNext()
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
         while ((uint)_index < (uint)_operations.Length)
         {
             var operation = _operations[_index];
@@ -78,6 +80,7 @@ sealed class TransactionIntentResidentKeyCursor : IEnumerator<byte[]>
             Current = key;
             return true;
         }
+
 
         Current = [];
         return false;

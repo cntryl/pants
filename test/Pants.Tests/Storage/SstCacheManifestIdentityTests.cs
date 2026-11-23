@@ -62,6 +62,7 @@ public sealed class SstCacheManifestIdentityTests
         var originalFile = PointCandidates(store);
         WarmPointReads(store, originalFile);
         var sources = store.CreateScanSources(originalFile, PantsScanDirection.Forward, null, null);
+
         try
         {
             var iterator = Assert.Single(sources).Iterator;
@@ -104,6 +105,7 @@ public sealed class SstCacheManifestIdentityTests
             null,
             null,
             CancellationToken.None);
+
         try
         {
             var source = Assert.Single(sources);

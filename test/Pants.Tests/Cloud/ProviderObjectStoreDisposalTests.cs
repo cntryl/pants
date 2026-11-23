@@ -14,7 +14,8 @@ public sealed class ProviderObjectStoreDisposalTests
     public async Task ShouldAttemptEveryDistinctStoreOnceBeforePropagatingDisposalFailures(
         bool persistenceOwnsStores,
         bool sharedStore,
-        bool multipleFailures)
+        bool multipleFailures
+    )
     {
         using var directory = new TemporaryDirectory();
         using var lease = new CloudLeaseCoordinator(
@@ -38,6 +39,7 @@ public sealed class ProviderObjectStoreDisposalTests
         Assert.Equal(1, wal.DisposeCount);
         Assert.Equal(1, sst.DisposeCount);
         Assert.Equal(1, control.DisposeCount);
+
         if (multipleFailures)
         {
             var aggregate = Assert.IsType<AggregateException>(exception);

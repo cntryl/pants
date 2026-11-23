@@ -15,6 +15,7 @@ public sealed class PantsCloudDropPressureTests
         await using var database = await PantsDatabase.OpenAsync(options);
         var observer = await database.ColumnFamilies.CreateAsync("observer");
         var families = new List<IPantsColumnFamily>();
+
         for (var index = 0; index < 3; index++)
         {
             var family = await database.ColumnFamilies.CreateAsync($"pressure-{index}");
@@ -23,6 +24,7 @@ public sealed class PantsCloudDropPressureTests
             write.Put("key"u8.ToArray(), new byte[2800]);
             await write.CommitAsync(PantsWriteOptions.BestEffort);
         }
+
 
         Assert.False(await database.Maintenance.WaitForWriteStallClearAsync(observer, TimeSpan.Zero));
         var waiter = database.Maintenance.WaitForWriteStallClearAsync(observer, TimeSpan.FromSeconds(5)).AsTask();

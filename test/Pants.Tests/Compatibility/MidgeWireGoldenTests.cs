@@ -42,7 +42,10 @@ public sealed class MidgeWireGoldenTests
     [InlineData(4, 12UL, "three")]
     [InlineData(5, 15UL, null)]
     public void ShouldDecodeUnmodifiedMidgeV2WalSegment(
-        int segmentId, ulong expectedSequence, string? expectedValue)
+        int segmentId,
+        ulong expectedSequence,
+        string? expectedValue
+    )
     {
         var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", "Compatibility", "Midge",
             "c684310d9d8ce8ecd1151c47151d4bea98b348cf", "wal", $"{segmentId:D20}.wal");
@@ -73,7 +76,8 @@ public sealed class MidgeWireGoldenTests
     [InlineData("sst-block-zstd9-v1.bin", (byte)3)]
     public void ShouldDecodeBlockGivenPinnedMidgeSstCodecGolden(
         string fixtureName,
-        byte expectedAlgorithmCode)
+        byte expectedAlgorithmCode
+    )
     {
         var input = ReadFixture("sst-block-input-v1.bin");
         var block = ReadFixture(fixtureName);

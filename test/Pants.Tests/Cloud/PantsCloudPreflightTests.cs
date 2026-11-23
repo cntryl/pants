@@ -190,7 +190,8 @@ public sealed class PantsCloudPreflightTests
             string objectKey,
             ulong offset,
             int length,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             Calls.Add($"Range:{objectKey}:{offset}:{length}");
             return ValueTask.FromResult(Range);
@@ -198,7 +199,8 @@ public sealed class PantsCloudPreflightTests
 
         public ValueTask<CloudObjectMetadata?> HeadAsync(
             string objectKey,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             Calls.Add($"Head:{objectKey}");
             return ValueTask.FromResult(Metadata);
@@ -208,7 +210,8 @@ public sealed class PantsCloudPreflightTests
             string objectKey,
             ReadOnlyMemory<byte> data,
             CloudObjectWriteCondition condition,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             MutationCalls++;
             throw new InvalidOperationException("Preflight must not write.");
@@ -217,13 +220,16 @@ public sealed class PantsCloudPreflightTests
         public async ValueTask<CloudObjectListPage> ListPageAsync(
             string prefix,
             string? continuationToken,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             Calls.Add("List");
+
             if (Failure is not null)
             {
                 throw Failure;
             }
+
 
             if (GateReads)
             {
@@ -236,7 +242,8 @@ public sealed class PantsCloudPreflightTests
         public ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
             string objectKey,
             CloudObjectDeleteCondition condition,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             MutationCalls++;
             throw new InvalidOperationException("Preflight must not delete.");

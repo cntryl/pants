@@ -38,7 +38,8 @@ static class DecoderFuzzHarness
         string target,
         IReadOnlyList<byte[]> seeds,
         Action<byte[]> decode,
-        int randomSeed = 20260907)
+        int randomSeed = 20260907
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(target);
         ArgumentNullException.ThrowIfNull(decode);
@@ -48,6 +49,7 @@ static class DecoderFuzzHarness
         {
             var seed = seeds[seedIndex];
             Probe(target, seed, seed, decode, randomSeed, seedIndex, -1);
+
             for (var iteration = 0; iteration < Iterations; iteration++)
             {
                 var random = new Random(MixSeed(randomSeed, seedIndex, iteration));
@@ -76,9 +78,11 @@ static class DecoderFuzzHarness
         Action<byte[]> decode,
         int randomSeed,
         int seedIndex,
-        int iteration)
+        int iteration
+    )
     {
         var started = Stopwatch.GetTimestamp();
+
         try
         {
             decode(input);
@@ -98,7 +102,9 @@ static class DecoderFuzzHarness
                 $"{exception}");
         }
 
+
         var elapsed = Stopwatch.GetElapsedTime(started);
+
         if (elapsed > PerInputBudget)
         {
             throw new XunitException(

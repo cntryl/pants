@@ -16,7 +16,8 @@ sealed class CloudDdlCoordinator
         string localRoot,
         ICloudDdlAuthority authority,
         LocalDiskStore diskStore,
-        IFailpointHandler failpoints)
+        IFailpointHandler failpoints
+    )
     {
         _preparePath = Path.Combine(Path.GetFullPath(localRoot), PrepareFileName);
         _authority = authority;
@@ -35,16 +36,19 @@ sealed class CloudDdlCoordinator
 
     public async ValueTask ReconcileStartupAsync(
         RuntimeState state,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await _authority.FenceDdlRegistryAsync(
             FromLocalManifest(),
             cancellationToken).ConfigureAwait(false);
         await ReconcilePreparedAsync(state, cancellationToken, true).ConfigureAwait(false);
         using var remote = await _authority.ReadDdlRegistryAsync(cancellationToken).ConfigureAwait(false);
+
         if (remote is null)
         {
             var bootstrap = FromLocalManifest();
+
             if (!await _authority.CompareExchangeDdlRegistryAsync(
                     bootstrap,
                     null,
@@ -54,9 +58,11 @@ sealed class CloudDdlCoordinator
                     "Cloud DDL registry bootstrap lost its authority race.");
             }
 
+
             _authorityAmbiguous = false;
             return;
         }
+
 
         foreach (var operation in remote.Registry.Operations)
         {
@@ -76,22 +82,26 @@ sealed class CloudDdlCoordinator
 
     public ValueTask ReconcilePendingAsync(
         RuntimeState state,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         ReconcilePreparedAsync(state, cancellationToken);
 
     public async ValueTask ExecuteAsync(
         RuntimeState state,
         JsonElement edit,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         CloudDdlEdit.Validate(edit);
         await ReconcilePreparedAsync(state, cancellationToken).ConfigureAwait(false);
         EnsureAuthorityResolved();
+
         if (_diskStore.IsColumnFamilyEditApplied(edit))
         {
             _diskStore.ApplyColumnFamilyEditVisibility(state, edit);
             return;
         }
+
 
         using var remote = await _authority.ReadDdlRegistryAsync(cancellationToken).ConfigureAwait(false);
         var registry = remote?.Registry.Clone() ?? FromLocalManifest();
@@ -115,6 +125,7 @@ sealed class CloudDdlCoordinator
         });
 
         var submitted = false;
+
         try
         {
             var published = await _authority.CompareExchangeDdlRegistryAsync(
@@ -131,6 +142,7 @@ sealed class CloudDdlCoordinator
                     submitted = true;
                     _failpoints.Hit(Failpoint.AfterDdlAmbiguousPrepare);
                 }).ConfigureAwait(false);
+
             if (!published)
             {
                 // A rejected conditional write is a definite answer: it did not commit.
@@ -138,6 +150,7 @@ sealed class CloudDdlCoordinator
                 throw new PantsFencedException(
                     "Cloud DDL registry publication lost its authority race.");
             }
+
 
             _failpoints.Hit(Failpoint.AfterDdlRemoteCas);
         }
@@ -155,6 +168,7 @@ sealed class CloudDdlCoordinator
                 _failpoints.Hit(Failpoint.BeforeDdlAuthorityReadback);
                 using var readback = await _authority.ReadDdlRegistryAsync(cancellationToken)
                     .ConfigureAwait(false);
+
                 if (readback?.Registry.Operations.Any(operation =>
                         StringComparer.Ordinal.Equals(
                             operation.OperationId,
@@ -190,6 +204,7 @@ sealed class CloudDdlCoordinator
             throw;
         }
 
+
         try
         {
             _diskStore.CommitColumnFamilyEdit(state, edit);
@@ -215,16 +230,20 @@ sealed class CloudDdlCoordinator
     async ValueTask ReconcilePreparedAsync(
         RuntimeState state,
         CancellationToken cancellationToken,
-        bool redriveAmbiguous = false)
+        bool redriveAmbiguous = false
+    )
     {
         var prepare = ReadPrepare();
+
         if (prepare is null)
         {
             _authorityAmbiguous = false;
             return;
         }
 
+
         using var remote = await _authority.ReadDdlRegistryAsync(cancellationToken).ConfigureAwait(false);
+
         if (remote is null)
         {
             if (_diskStore.IsColumnFamilyEditApplied(prepare.Edit))
@@ -237,6 +256,7 @@ sealed class CloudDdlCoordinator
             _authorityAmbiguous = false;
             return;
         }
+
 
         if (remote.Registry.Operations.Any(operation =>
                 StringComparer.Ordinal.Equals(operation.OperationId, prepare.OperationId)))
@@ -298,7 +318,8 @@ sealed class CloudDdlCoordinator
         RuntimeState state,
         CloudDdlPrepare prepare,
         CloudDdlRegistryObject remote,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (remote.Registry.Epoch != prepare.ExpectedRemoteEpoch)
         {
@@ -318,6 +339,7 @@ sealed class CloudDdlCoordinator
             OperationId = prepare.OperationId,
             Edit = prepare.Edit.Clone()
         });
+
         if (!await _authority.CompareExchangeDdlRegistryAsync(
                 registry,
                 remote.Version,
@@ -325,6 +347,7 @@ sealed class CloudDdlCoordinator
         {
             using var current = await _authority.ReadDdlRegistryAsync(cancellationToken)
                 .ConfigureAwait(false);
+
             if (current?.Registry.Operations.Any(operation =>
                     StringComparer.Ordinal.Equals(operation.OperationId, prepare.OperationId)) != true)
             {
@@ -332,6 +355,7 @@ sealed class CloudDdlCoordinator
                     "Redriving a cloud DDL with an unknown outcome lost its authority race.");
             }
         }
+
 
         if (!_diskStore.IsColumnFamilyEditApplied(prepare.Edit))
         {
@@ -356,10 +380,12 @@ sealed class CloudDdlCoordinator
     void ValidateLocalStateAgainst(CloudDdlRegistry registry)
     {
         var localFamilies = _diskStore.GetColumnFamilyMetadataSnapshot();
+
         foreach (var remoteFamily in registry.ColumnFamilies)
         {
             var localFamily = localFamilies.SingleOrDefault(family =>
                 family.Id == remoteFamily.Id);
+
             if (localFamily is not null &&
                 !StringComparer.Ordinal.Equals(localFamily.Name, remoteFamily.Name))
             {
@@ -367,6 +393,7 @@ sealed class CloudDdlCoordinator
                     $"Cloud DDL registry conflicts for column family {remoteFamily.Id}.");
             }
         }
+
 
         if (localFamilies.Any(local =>
                 registry.ColumnFamilies.All(remote => remote.Id != local.Id)))

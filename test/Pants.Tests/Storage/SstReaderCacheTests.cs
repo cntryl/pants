@@ -144,6 +144,7 @@ public sealed class SstReaderCacheTests
         Assert.True(openStarted.Wait(TestTimeouts.Expected));
         releaseOpening.Set();
         var leases = await Task.WhenAll(acquisitions).WaitAsync(TestTimeouts.Expected);
+
         try
         {
             Assert.Equal(1, Volatile.Read(ref opens));
@@ -222,10 +223,12 @@ public sealed class SstReaderCacheTests
         }
 
         using var cache = new SstReaderCache(readerBytes * 3, SstReader.Open);
+
         for (var index = 0; index < 100; index++)
         {
             using var lease = cache.GetOrAdd(Sst($"reader-{index}.sst"), path, out _);
         }
+
 
         Assert.True(cache.SnapshotFiles().Count <= 3);
         Assert.Contains("reader-99.sst", cache.SnapshotFiles());

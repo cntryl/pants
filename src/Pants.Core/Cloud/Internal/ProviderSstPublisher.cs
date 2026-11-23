@@ -28,7 +28,8 @@ sealed class ProviderSstPublisher(
         string name,
         string? localPath,
         IReadOnlyList<FileMeta> proofs,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (_proven.ContainsKey(name))
         {
@@ -39,6 +40,7 @@ sealed class ProviderSstPublisher(
         var objectKey = PantsCloudObjectLayout.SstPrefix + name;
         var remote = await sstStore.HeadAsync(objectKey, cancellationToken).ConfigureAwait(false);
         ensureLeaseValid();
+
         if (remote is not null)
         {
             foreach (var proof in proofs)
@@ -60,6 +62,7 @@ sealed class ProviderSstPublisher(
             return;
         }
 
+
         if (localPath is null)
         {
             throw new PantsRecoveryFailedException(
@@ -71,10 +74,12 @@ sealed class ProviderSstPublisher(
             : await admission.AdmitAsync(new FileInfo(localPath).Length, cancellationToken)
                 .ConfigureAwait(false);
         var local = File.ReadAllBytes(localPath);
+
         foreach (var proof in proofs)
         {
             CloudSstValidator.Validate(local, proof);
         }
+
 
         var metadata = await UploadAndVerifyAsync(objectKey, local, cancellationToken)
             .ConfigureAwait(false);
@@ -91,7 +96,8 @@ sealed class ProviderSstPublisher(
     public async ValueTask PublishOutputAsync(
         string name,
         string localPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var objectKey = PantsCloudObjectLayout.SstPrefix + name;
         using var reservation = admission is null
@@ -101,6 +107,7 @@ sealed class ProviderSstPublisher(
         var local = File.ReadAllBytes(localPath);
         ensureLeaseValid();
         var existing = await sstStore.HeadAsync(objectKey, cancellationToken).ConfigureAwait(false);
+
         if (existing is not null)
         {
             await VerifyAsync(objectKey, local, existing, false, cancellationToken).ConfigureAwait(false);
@@ -108,6 +115,7 @@ sealed class ProviderSstPublisher(
             _identityRegistry.Record(name, existing.SizeBytes, existing.Version);
             return;
         }
+
 
         var metadata = await UploadAndVerifyAsync(objectKey, local, cancellationToken)
             .ConfigureAwait(false);
@@ -117,7 +125,8 @@ sealed class ProviderSstPublisher(
     async ValueTask<CloudObjectMetadata> UploadAndVerifyAsync(
         string objectKey,
         byte[] local,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ensureLeaseValid();
         await _validateRemoteLeaseAsync(cancellationToken).ConfigureAwait(false);
@@ -139,7 +148,8 @@ sealed class ProviderSstPublisher(
         byte[] local,
         CloudObjectMetadata metadata,
         bool created,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (metadata.SizeBytes != checked((ulong)local.Length))
         {
@@ -156,11 +166,13 @@ sealed class ProviderSstPublisher(
                     checked((ulong)offset),
                     length,
                     cancellationToken).ConfigureAwait(false) ?? throw Mismatch(objectKey, created);
+
                 if (!StringComparer.Ordinal.Equals(range.Version, metadata.Version))
                 {
                     throw new PantsFencedException(
                         $"Cloud SST '{objectKey}' changed identity during verification.");
                 }
+
 
                 if (!range.Data.Span.SequenceEqual(local.AsSpan(offset, length)))
                 {
@@ -175,11 +187,13 @@ sealed class ProviderSstPublisher(
             // previously published SSTs.
             var whole = await sstStore.GetAsync(objectKey, cancellationToken).ConfigureAwait(false) ??
                         throw Mismatch(objectKey, created);
+
             if (!StringComparer.Ordinal.Equals(whole.Version, metadata.Version))
             {
                 throw new PantsFencedException(
                     $"Cloud SST '{objectKey}' changed identity during verification.");
             }
+
 
             if (!whole.Data.Span.SequenceEqual(local))
             {

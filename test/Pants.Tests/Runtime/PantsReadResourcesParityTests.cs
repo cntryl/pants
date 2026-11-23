@@ -66,10 +66,12 @@ public sealed class PantsReadResourcesParityTests
         await using (var scan = await reader.ScanAsync(new PantsScanQuery { Direction = direction, Limit = 1 }))
         {
             var rows = new List<PantsEntry>();
+
             await foreach (var row in scan)
             {
                 rows.Add(row);
             }
+
             var first = direction == PantsScanDirection.Forward ? 0 : 39;
             Assert.Equal($"key-{first:0000}", TestBytes.ToText(Assert.Single(rows).Key));
             Assert.Equal($"value-{first:0000}", TestBytes.ToText(rows[0].Value));
@@ -102,12 +104,14 @@ public sealed class PantsReadResourcesParityTests
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
         Assert.Equal(valueBytes, (await reader.GetAsync("key"u8.ToArray()))!.Value.Length);
+
         foreach (var direction in new[] { PantsScanDirection.Forward, PantsScanDirection.Reverse })
         {
             foreach (var limit in new int?[] { 1, null })
             {
                 await using var scan = await reader.ScanAsync(new PantsScanQuery { Direction = direction, Limit = limit });
                 var count = 0;
+
                 await foreach (var row in scan)
                 {
                     Assert.Equal("key", TestBytes.ToText(row.Key));
@@ -115,9 +119,11 @@ public sealed class PantsReadResourcesParityTests
                     Assert.DoesNotContain(row.Value.ToArray(), static value => value != (byte)'v');
                     count++;
                 }
+
                 Assert.Equal(1, count);
             }
         }
+
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.InRange(metrics.ReadMetadataPeakBytes, 1, resolved.ReadMetadataBudgetBytes);
         Assert.Equal(0, metrics.ScanBufferCapacityBytes);
@@ -145,6 +151,7 @@ public sealed class PantsReadResourcesParityTests
             Assert.Equal(0, (await database.Diagnostics.GetRuntimeMetricsAsync()).ReadMetadataUsedBytes);
             await using var reader = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
+
             if (admitted)
             {
                 Assert.Equal("v", TestBytes.ToText((await reader.GetAsync("key"u8.ToArray()))!.Value));
@@ -154,18 +161,22 @@ public sealed class PantsReadResourcesParityTests
                 var error = await Assert.ThrowsAsync<PantsResourceLimitException>(() => reader.GetAsync("key"u8.ToArray()).AsTask());
                 Assert.Equal(PantsErrorCode.ResourceLimit, error.Code);
             }
+
             async Task ReadScanAsync()
             {
                 await using var scan = await reader.ScanAsync(new PantsScanQuery { Limit = 1 });
                 var count = 0;
+
                 await foreach (var row in scan)
                 {
                     Assert.Equal("key", TestBytes.ToText(row.Key));
                     Assert.Equal("v", TestBytes.ToText(row.Value));
                     count++;
                 }
+
                 Assert.Equal(1, count);
             }
+
             if (admitted)
             {
                 await ReadScanAsync();
@@ -204,6 +215,7 @@ public sealed class PantsReadResourcesParityTests
                 writer.DeleteRange("z-start"u8.ToArray(), "zz-end"u8.ToArray());
                 await writer.CommitAsync(cloud ? PantsWriteOptions.CloudAsync : PantsWriteOptions.Sync);
                 acknowledged.Add(key);
+
                 if (index % 10 == 0)
                 {
                     try
@@ -216,6 +228,7 @@ public sealed class PantsReadResourcesParityTests
                     }
                 }
             }
+
             Assert.NotEmpty(acknowledged);
             Assert.NotNull(failure);
             Assert.Equal(PantsErrorCode.ResourceLimit, failure.Code);
@@ -226,12 +239,14 @@ public sealed class PantsReadResourcesParityTests
             reopened.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
         var keys = new List<string>();
+
         await foreach (var row in scan)
         {
             Assert.Equal(1024, row.Value.Length);
             Assert.DoesNotContain(row.Value.ToArray(), static value => value != 0);
             keys.Add(TestBytes.ToText(row.Key));
         }
+
         Assert.Equal(acknowledged, keys);
         await using var retry = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadWrite);

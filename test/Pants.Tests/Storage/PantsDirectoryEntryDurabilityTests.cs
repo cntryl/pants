@@ -17,6 +17,7 @@ public sealed class PantsDirectoryEntryDurabilityTests
         var options = PantsOpenOptions.Local(root).WithBackgroundCompaction(false);
         var walDirectory = Path.Combine(root, "wal");
         var walPath = WalTestFiles.ActivePath(root);
+
         if (failpointName != nameof(Failpoint.BeforeDatabaseRootDirectorySync))
         {
             await using (var initialized = await PantsDatabase.OpenAsync(options))
@@ -37,6 +38,7 @@ public sealed class PantsDirectoryEntryDurabilityTests
             }
         }
 
+
         var handler = new ThrowAtFailpointHandler(Enum.Parse<Failpoint>(failpointName));
 
         await Assert.ThrowsAnyAsync<PantsException>(() => PantsDatabase.OpenForTestingAsync(
@@ -45,10 +47,12 @@ public sealed class PantsDirectoryEntryDurabilityTests
 
         Assert.Equal(1, handler.HitCount);
         Assert.True(Directory.Exists(root));
+
         if (failpointName == nameof(Failpoint.BeforeWalFileDirectorySync))
         {
             Assert.True(File.Exists(walPath));
         }
+
 
         await using (var database = await PantsDatabase.OpenAsync(options))
         {

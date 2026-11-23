@@ -9,10 +9,12 @@ public sealed class PantsSstReadIntegrationTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
+
         for (var index = 0; index < 10; index++)
         {
             await PutAsync(database, $"key_{index:000}", "value_from_sst");
         }
+
 
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         Assert.True((await database.Diagnostics.GetRuntimeMetricsAsync()).SstCount > 0);
@@ -27,6 +29,7 @@ public sealed class PantsSstReadIntegrationTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
+
         for (var batch = 0; batch < 3; batch++)
         {
             for (var index = 0; index < 5; index++)
@@ -36,6 +39,7 @@ public sealed class PantsSstReadIntegrationTests
 
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
+
 
         for (var batch = 0; batch < 3; batch++)
         {
@@ -51,10 +55,12 @@ public sealed class PantsSstReadIntegrationTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
+
         for (var index = 0; index < 20; index++)
         {
             await PutAsync(database, $"key_{index:000}", "test_value");
         }
+
 
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
@@ -104,10 +110,12 @@ public sealed class PantsSstReadIntegrationTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
+
         for (var index = 0; index < 3; index++)
         {
             await PutAsync(database, $"corrupt-range-{index}", "corrupt-value");
         }
+
 
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         CorruptFirstSstDataByte(directory.Path);

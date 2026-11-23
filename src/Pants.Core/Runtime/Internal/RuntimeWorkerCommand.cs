@@ -11,7 +11,8 @@ sealed class RuntimeWorkerCommand
 
     public RuntimeWorkerCommand(
         Func<CancellationToken, ValueTask> operation,
-        CancellationToken callerCancellationToken)
+        CancellationToken callerCancellationToken
+    )
     {
         _operation = operation;
         _callerCancellationToken = callerCancellationToken;
@@ -22,9 +23,11 @@ sealed class RuntimeWorkerCommand
     public async ValueTask ExecuteAsync(CancellationToken lifetimeCancellationToken)
     {
         CancellationTokenSource? linkedCancellation = null;
+
         try
         {
             var executionCancellationToken = lifetimeCancellationToken;
+
             if (_callerCancellationToken.CanBeCanceled)
             {
                 if (!lifetimeCancellationToken.CanBeCanceled ||
@@ -40,6 +43,7 @@ sealed class RuntimeWorkerCommand
                     executionCancellationToken = linkedCancellation.Token;
                 }
             }
+
 
             await _operation(executionCancellationToken).ConfigureAwait(false);
             _completion.TrySetResult();

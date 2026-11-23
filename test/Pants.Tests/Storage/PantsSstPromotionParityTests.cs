@@ -28,6 +28,7 @@ public sealed class PantsSstPromotionParityTests
                 await writer.CommitAsync(cloud ? PantsWriteOptions.CloudStrict : PantsWriteOptions.Sync);
                 await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             }
+
             var before = await database.Diagnostics.GetStorageLayoutAsync();
             var files = Assert.Single(before.Levels).Files;
             Assert.Equal(0, Assert.Single(before.Levels).Level);
@@ -46,6 +47,7 @@ public sealed class PantsSstPromotionParityTests
             var inner = Assert.Single(promoted.Levels);
             Assert.Equal(1, inner.Level);
             Assert.Equal(originals, inner.Files.Select(static file => file.Name).Order(StringComparer.Ordinal));
+
             foreach (var file in inner.Files)
             {
                 Assert.Equal(bytes[file.Name], SHA256.HashData(File.ReadAllBytes(Path.Combine(directory.Path, "sst", file.Name))));
@@ -56,6 +58,7 @@ public sealed class PantsSstPromotionParityTests
                 Assert.Equal(original.SmallestKey!.Value.ToArray(), file.SmallestKey!.Value.ToArray());
                 Assert.Equal(original.LargestKey!.Value.ToArray(), file.LargestKey!.Value.ToArray());
             }
+
             var after = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(metrics.SstBytesWrittenTotal, after.SstBytesWrittenTotal);
             Assert.Equal(metrics.CompactionBytesRewritten, after.CompactionBytesRewritten);
@@ -91,11 +94,13 @@ public sealed class PantsSstPromotionParityTests
                     database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadWrite);
                 writer.Put(TestBytes.FromString($"key-{index:000}"), new byte[1024]);
                 await writer.CommitAsync(PantsWriteOptions.Buffered);
+
                 if (index % 10 == 0)
                 {
                     await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
                 }
             }
+
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             var before = await database.Diagnostics.GetRuntimeMetricsAsync();
             await database.Maintenance.CompactAllAsync();
@@ -112,6 +117,7 @@ public sealed class PantsSstPromotionParityTests
             reopened.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
         var seen = 0;
+
         await foreach (var row in scan)
         {
             Assert.Equal($"key-{seen:000}", TestBytes.ToText(row.Key));
@@ -119,6 +125,7 @@ public sealed class PantsSstPromotionParityTests
             Assert.DoesNotContain(row.Value.ToArray(), static value => value != 0);
             seen++;
         }
+
         Assert.Equal(64, seen);
     }
 
@@ -133,6 +140,7 @@ public sealed class PantsSstPromotionParityTests
             .WithSimulatedCloudLocalStorageBudget(localBudget)
             .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1000, BackgroundEnabled: false));
         await using var database = await PantsDatabase.OpenAsync(options);
+
         foreach (var key in new[] { "a", "m", "z" })
         {
             await using var writer = await database.Transactions.BeginAsync(
@@ -141,20 +149,25 @@ public sealed class PantsSstPromotionParityTests
             await writer.CommitAsync(PantsWriteOptions.CloudStrict);
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
+
         var originals = (await database.Diagnostics.GetStorageLayoutAsync()).Levels.SelectMany(static level => level.Files)
             .Select(static file => file.Name).Order(StringComparer.Ordinal).ToArray();
+
         foreach (var path in Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"))
         {
             File.Delete(path);
         }
+
         await using var hog = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadWrite);
         var held = 0L;
+
         for (var index = 0; index < 100 && held <= localBudget / 2; index++)
         {
             hog.Put(TestBytes.FromString($"held-{index:000}"), new byte[4096]);
             held = (await database.Diagnostics.GetRuntimeMetricsAsync()).HybridStorageBudget!.Usage.TransactionSpillBytes;
         }
+
         Assert.True(held > localBudget / 2);
         var before = await database.Diagnostics.GetRuntimeMetricsAsync();
 
@@ -280,6 +293,7 @@ public sealed class PantsSstPromotionParityTests
                 await PutAsync(database, cloud, key, $"value-{key}");
                 await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             }
+
             originals = (await database.Diagnostics.GetStorageLayoutAsync()).Levels.SelectMany(static level => level.Files).Select(static file => file.Name).Order(StringComparer.Ordinal).ToArray();
             var hashes = originals.ToDictionary(name => name, name => SHA256.HashData(File.ReadAllBytes(Path.Combine(directory.Path, "sst", name))));
             failure.Arm();
@@ -289,6 +303,7 @@ public sealed class PantsSstPromotionParityTests
             Assert.NotNull(error);
             Assert.True(error is IOException or PantsIOException, error.ToString());
             Assert.Equal(1, failure.Hits);
+
             foreach (var name in originals)
             {
                 Assert.Equal(hashes[name], SHA256.HashData(File.ReadAllBytes(Path.Combine(directory.Path, "sst", name))));
@@ -322,12 +337,15 @@ public sealed class PantsSstPromotionParityTests
                 await PutAsync(database, true, key, $"value-{key}");
                 await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             }
+
             originals = handler.GetObjectPaths("/sst/");
             var hashes = originals.ToDictionary(name => name, name => SHA256.HashData(handler.GetObjectBytes(name)));
+
             foreach (var path in Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"))
             {
                 File.Delete(path);
             }
+
             var rangeReads = handler.SstRangeReads;
             var fullReads = handler.SstFullReads;
 
@@ -337,6 +355,7 @@ public sealed class PantsSstPromotionParityTests
             Assert.Equal(originals, handler.GetObjectPaths("/sst/"));
             Assert.Equal(rangeReads, handler.SstRangeReads);
             Assert.Equal(fullReads, handler.SstFullReads);
+
             foreach (var name in originals)
             {
                 Assert.Equal(hashes[name], SHA256.HashData(handler.GetObjectBytes(name)));
@@ -377,10 +396,12 @@ public sealed class PantsSstPromotionParityTests
     {
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
         var rows = new List<(string Key, string Value)>();
+
         await foreach (var row in scan)
         {
             rows.Add((TestBytes.ToText(row.Key), TestBytes.ToText(row.Value)));
         }
+
         Assert.Equal([("a", "value-a"), ("m", "value-m"), ("z", "value-z")], rows);
     }
 }

@@ -23,10 +23,12 @@ public sealed class BackupLeaseAuthorityTests
         var sourceAuthority = ReadAuthority(sourcePath);
         var sourceLease = ReadLeaseFields(sourcePath);
         var capturedLease = ReadLeaseFields(Path.Combine(artifact, "objects"));
+
         foreach (var field in new[] { "lease_version", "fencing_epoch", "holder", "owner", "acquired" })
         {
             Assert.Equal(sourceLease[field], capturedLease[field]);
         }
+
         Assert.Equal(DateTimeOffset.UnixEpoch, DateTimeOffset.Parse(capturedLease["expires"], CultureInfo.InvariantCulture));
 
         await PantsDatabase.RestoreBackupAsync(artifact, Options(restoredPath));
@@ -85,10 +87,12 @@ public sealed class BackupLeaseAuthorityTests
         await using var source = await OpenAsync(sourcePath, new ManualClock(DateTimeOffset.UtcNow));
         await SeedAsync(source);
         await source.BackupAsync(artifact, TimeSpan.FromSeconds(10));
+
         if (relativePath == StripePath)
         {
             await PutArtifactObjectAsync(artifact, StripePath, "legacy native lock"u8.ToArray());
         }
+
         var path = Path.Combine(artifact, "objects", relativePath);
         var bytes = await File.ReadAllBytesAsync(path);
         bytes[0] ^= 1;
@@ -147,10 +151,12 @@ public sealed class BackupLeaseAuthorityTests
         var manifest = JsonNode.Parse(await File.ReadAllTextAsync(manifestPath))!.AsObject();
         var objects = manifest["objects"]!.AsArray();
         var existing = objects.SingleOrDefault(item => item!["path"]!.GetValue<string>() == relativePath);
+
         if (existing is not null)
         {
             objects.Remove(existing);
         }
+
         objects.Add(new JsonObject
         {
             ["path"] = relativePath,

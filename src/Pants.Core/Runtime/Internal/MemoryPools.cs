@@ -21,23 +21,28 @@ sealed record MemoryPools(
         PantsMemoryConfiguration memory,
         PantsStorageConfiguration storage,
         PantsPerformanceGoal performanceGoal,
-        PantsWorkloadProfile workloadProfile)
+        PantsWorkloadProfile workloadProfile
+    )
     {
         var persistent = storage is not PantsStorageConfiguration.InMemory;
         var automaticMemtables = memory.MemtableSizeLimitBytes is null;
         var transactionPool = memory.TransactionMemoryPoolBytes ?? Math.Max(1, budgetBytes / 10);
+
         if (transactionPool > budgetBytes)
         {
             throw PantsException.ResourceLimit("Transaction memory pool exceeds the total memory budget.");
         }
 
+
         var remainingAfterRequiredPools = Math.Max(0, budgetBytes - transactionPool - 2);
         var desiredCompactionPool = Math.Min(budgetBytes / 5, MaximumCompactionPoolBytes);
         var compactionPool = Math.Min(desiredCompactionPool, remainingAfterRequiredPools);
+
         if (compactionPool <= 0)
         {
             throw PantsException.ResourceLimit("The memory budget leaves no capacity for bounded compaction.");
         }
+
 
         const long scanPool = 0;
 
@@ -46,10 +51,12 @@ sealed record MemoryPools(
         var readAndMemtableBytes = budgetBytes - transactionPool - compactionPool - scanPool;
         var automaticReadShare = automaticMemtables && persistent ? readAndMemtableBytes / 4 : 0;
         var maximumMemtable = (readAndMemtableBytes - automaticReadShare) / 2;
+
         if (maximumMemtable <= 0)
         {
             throw PantsException.ResourceLimit("The memory budget leaves no capacity for memtables.");
         }
+
 
         var memtableSizeLimit = memory.MemtableSizeLimitBytes ??
                                 Math.Min(DesiredMemtable(performanceGoal, workloadProfile), maximumMemtable);
@@ -57,10 +64,12 @@ sealed record MemoryPools(
         Validate(budgetBytes, transactionPool, compactionPool, scanPool, memtableSizeLimit, memtableFlushThreshold);
 
         var blockCache = budgetBytes - transactionPool - compactionPool - scanPool - 2 * memtableSizeLimit;
+
         if (performanceGoal == PantsPerformanceGoal.Economy)
         {
             blockCache = Math.Min(blockCache, MaximumEconomyBlockCacheBytes);
         }
+
 
         if (blockCache <= 0 && persistent)
         {
@@ -101,7 +110,8 @@ sealed record MemoryPools(
         long compactionPool,
         long scanPool,
         long memtableSizeLimit,
-        long memtableFlushThreshold)
+        long memtableFlushThreshold
+    )
     {
         if (memtableSizeLimit <= 0 || memtableFlushThreshold <= 0)
         {
@@ -114,6 +124,7 @@ sealed record MemoryPools(
         }
 
         long reservedBytes;
+
         try
         {
             reservedBytes = checked(2 * memtableSizeLimit + transactionPool + compactionPool + scanPool);
@@ -123,6 +134,7 @@ sealed record MemoryPools(
             throw PantsException.ResourceLimit(
                 "Configured memory pools overflow the total memory budget calculation.");
         }
+
 
         if (reservedBytes > budgetBytes)
         {

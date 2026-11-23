@@ -4,17 +4,25 @@ namespace Cntryl.Pants.Checkpoint;
 
 static class CheckpointCommitPolicy
 {
-    public static async ValueTask CommitAsync(TimeProvider time, long cellDeadline, Observation observation,
-        Func<ValueTask> commit, Func<TimeSpan, ValueTask<bool>> wait)
+    public static async ValueTask CommitAsync(
+        TimeProvider time,
+        long cellDeadline,
+        Observation observation,
+        Func<ValueTask> commit,
+        Func<TimeSpan, ValueTask<bool>> wait
+    )
     {
         var deadline = Math.Min(cellDeadline, CheckpointClock.Deadline(time, time.GetTimestamp(), TimeSpan.FromSeconds(30)));
+
         while (true)
         {
             if (CheckpointClock.Remaining(time, deadline) <= TimeSpan.Zero)
             {
                 throw Expired(observation);
             }
+
             observation.Attempts++;
+
             try
             {
                 await commit().ConfigureAwait(false);
@@ -26,22 +34,27 @@ static class CheckpointCommitPolicy
                 observation.WriteStalls++;
                 observation.LastStall = exception.Message;
             }
+
             while (true)
             {
                 var remaining = CheckpointClock.Remaining(time, deadline);
+
                 if (remaining <= TimeSpan.Zero)
                 {
                     throw Expired(observation);
                 }
+
                 var allowance = remaining < TimeSpan.FromSeconds(1) ? remaining : TimeSpan.FromSeconds(1);
                 observation.WaitCalls++;
                 var started = time.GetTimestamp();
+
                 try
                 {
                     if (await wait(allowance).ConfigureAwait(false))
                     {
                         break;
                     }
+
                     observation.WaitTimeouts++;
                 }
                 catch (PantsWriteStallException exception)

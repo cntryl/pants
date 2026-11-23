@@ -7,7 +7,8 @@ static class RuntimeBootstrapper
         IPantsClock ttlClock,
         RuntimeTelemetry telemetry,
         RuntimeDependencies dependencies,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (plan.OpenTimeout is not null || cancellationToken.CanBeCanceled)
         {
@@ -30,25 +31,31 @@ static class RuntimeBootstrapper
         IPantsClock ttlClock,
         RuntimeTelemetry telemetry,
         RuntimeDependencies dependencies,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var scope = new StartupScope(plan.OpenTimeout, dependencies.RuntimeTimeProvider, cancellationToken);
         var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Actor? preparedActor = null;
         Exception? preparationFailure = null;
         _ = Task.Run(PrepareAsync, CancellationToken.None);
+
         try
         {
             _ = await Task.WhenAny(ready.Task, scope.Cancelled).ConfigureAwait(false);
+
             if (!ready.Task.IsCompleted)
             {
                 throw await scope.Cancelled.ConfigureAwait(false);
             }
 
+
+
             if (preparationFailure is { } failure)
             {
                 System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
             }
+
             var actor = scope.Accept(() => Volatile.Read(ref preparedActor));
             Interlocked.Exchange(ref preparedActor, null);
             return new RuntimeComposition(actor);
@@ -59,10 +66,12 @@ static class RuntimeBootstrapper
             throw;
         }
 
+
         async Task PrepareAsync()
         {
             Actor? actor = null;
             var admitted = false;
+
             try
             {
                 scope.Check();
@@ -73,6 +82,7 @@ static class RuntimeBootstrapper
                 dependencies.Failpoints.Hit(Failpoint.AfterStartupPrepared);
                 Volatile.Write(ref preparedActor, actor);
                 ready.TrySetResult();
+
                 if (await scope.Decision.ConfigureAwait(false))
                 {
                     admitted = true;
@@ -89,11 +99,13 @@ static class RuntimeBootstrapper
             finally
             {
                 Interlocked.Exchange(ref preparedActor, null);
+
                 if (actor is not null)
                 {
                     scope.Cancel(false);
                     dependencies.ObserveStartup(StartupEvent.Aborted);
                     await scope.WaitForCancellationCallbacksAsync().ConfigureAwait(false);
+
                     try
                     {
                         await actor.DisposeAsync().ConfigureAwait(false);
@@ -102,10 +114,13 @@ static class RuntimeBootstrapper
                     {
                         // Disposal retains authority until actual owned work stops.
                     }
+
                     await actor.OwnedRuntimeResourcesReleased.ConfigureAwait(false);
                 }
+
                 await scope.WaitForCancellationCallbacksAsync().ConfigureAwait(false);
                 scope.Dispose();
+
                 if (!admitted)
                 {
                     dependencies.ObserveStartup(StartupEvent.CleanupFinished);

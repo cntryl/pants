@@ -46,6 +46,7 @@ public class WalReplayScalingSystemBenchmarks : Tier3Benchmark
         var options = Options(_databasePath);
 
         await using var database = await PantsDatabase.OpenAsync(options);
+
         for (var index = 0; index < FlushedSstCount; index++)
         {
             await Tier3Database.PutBatchAsync(
@@ -55,12 +56,15 @@ public class WalReplayScalingSystemBenchmarks : Tier3Benchmark
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
+
         var runtime = await database.Diagnostics.GetRuntimeMetricsAsync();
+
         if (runtime.SstCount != FlushedSstCount)
         {
             throw new InvalidOperationException(
                 $"Expected {FlushedSstCount} unrelated SSTs, found {runtime.SstCount}.");
         }
+
 
         for (var index = 0; index < WalCommitCount; index++)
         {
@@ -94,12 +98,14 @@ public class WalReplayScalingSystemBenchmarks : Tier3Benchmark
                 try
                 {
                     var recovery = await reopened.Diagnostics.GetRecoveryMetricsAsync();
+
                     if (recovery.WalRecordsReplayed != WalCommitCount || recovery.WalBytesReplayed <= 0)
                     {
                         throw new InvalidOperationException(
                             $"Expected {WalCommitCount} replayed WAL records; found " +
                             $"{recovery.WalRecordsReplayed} records and {recovery.WalBytesReplayed} bytes.");
                     }
+
 
                     if (await Tier3Database.GetAsync(reopened, Tier3Data.Key(0)) is null ||
                         await Tier3Database.GetAsync(reopened, Tier3Data.Key(100_000 + WalCommitCount - 1)) is null)

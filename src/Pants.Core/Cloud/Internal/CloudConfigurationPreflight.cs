@@ -8,7 +8,8 @@ static class CloudConfigurationPreflight
     public static ValueTask<PantsCloudValidationReport> RunAsync(
         PantsCloudStorageLocation location,
         PantsCloudPreflightOptions? options,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(location);
         return RunLocationsAsync(
@@ -22,7 +23,8 @@ static class CloudConfigurationPreflight
     public static ValueTask<PantsCloudValidationReport> RunAsync(
         PantsCloudStorageTopology topology,
         PantsCloudPreflightOptions? options,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(topology);
         return RunLocationsAsync(
@@ -37,7 +39,8 @@ static class CloudConfigurationPreflight
         PantsCloudStorageTopology topology,
         PantsCloudPreflightOptions options,
         StoreFactory factory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(topology);
         ArgumentNullException.ThrowIfNull(options);
@@ -53,7 +56,8 @@ static class CloudConfigurationPreflight
         IReadOnlyList<CloudStorageLocations.Item> locations,
         PantsCloudPreflightOptions options,
         StoreFactory factory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -97,15 +101,19 @@ static class CloudConfigurationPreflight
         long started,
         StoreFactory factory,
         CancellationToken callerToken,
-        CancellationToken deadlineToken)
+        CancellationToken deadlineToken
+    )
     {
         var structural = CloudConfigurationValidator.Validate(item.Location, item.Roles);
+
         if (!structural.IsValid)
         {
             return structural;
         }
 
+
         ICloudObjectStore store;
+
         try
         {
             store = await factory(item.Location, Remaining(totalBudget, started), deadlineToken)
@@ -126,6 +134,7 @@ static class CloudConfigurationPreflight
                 Unverified(item, PantsCloudCheckCode.RangedRead, "Provider backend did not resolve."));
         }
 
+
         await using var ownedStore = store.ConfigureAwait(false);
 
         var findings = new List<PantsCloudValidationFinding>(structural.Findings)
@@ -134,6 +143,7 @@ static class CloudConfigurationPreflight
         };
 
         CloudObjectListPage page;
+
         try
         {
             page = await store.ListPageAsync("", null, deadlineToken).ConfigureAwait(false);
@@ -156,7 +166,9 @@ static class CloudConfigurationPreflight
             return new PantsCloudValidationReport(findings);
         }
 
+
         var objectKey = page.ObjectKeys.Count == 0 ? null : page.ObjectKeys[0];
+
         if (objectKey is null)
         {
             findings.Add(NotApplicable(
@@ -170,7 +182,9 @@ static class CloudConfigurationPreflight
             return new PantsCloudValidationReport(findings);
         }
 
+
         CloudObjectMetadata? metadata;
+
         try
         {
             metadata = await store.HeadAsync(objectKey, deadlineToken).ConfigureAwait(false);
@@ -191,6 +205,7 @@ static class CloudConfigurationPreflight
             return new PantsCloudValidationReport(findings);
         }
 
+
         if (metadata is null)
         {
             findings.Add(Failure(
@@ -203,11 +218,13 @@ static class CloudConfigurationPreflight
         }
 
         findings.Add(Passed(item, PantsCloudCheckCode.ObjectHead, "Object HEAD passed."));
+
         try
         {
             var value = metadata.SizeBytes == 0
                 ? await store.GetAsync(objectKey, deadlineToken).ConfigureAwait(false)
                 : await store.GetRangeAsync(objectKey, 0, 1, deadlineToken).ConfigureAwait(false);
+
             if (value is null)
             {
                 findings.Add(Failure(
@@ -243,6 +260,7 @@ static class CloudConfigurationPreflight
                 Message(PantsCloudCheckCode.RangedRead, failure)));
         }
 
+
         return new PantsCloudValidationReport(findings);
     }
 
@@ -266,13 +284,15 @@ static class CloudConfigurationPreflight
 
     static PantsCloudValidationReport Append(
         PantsCloudValidationReport report,
-        params PantsCloudValidationFinding[] findings) =>
+        params PantsCloudValidationFinding[] findings
+    ) =>
         new(report.Findings.Concat(findings));
 
     static PantsCloudValidationFinding Passed(
         CloudStorageLocations.Item item,
         PantsCloudCheckCode code,
-        string message) => Finding(
+        string message
+    ) => Finding(
         item,
         code,
         PantsCloudCheckOutcome.Passed,
@@ -284,7 +304,8 @@ static class CloudConfigurationPreflight
         CloudStorageLocations.Item item,
         PantsCloudCheckCode code,
         PantsCloudFailureKind failureKind,
-        string message) => Finding(
+        string message
+    ) => Finding(
         item,
         code,
         PantsCloudCheckOutcome.Failed,
@@ -295,7 +316,8 @@ static class CloudConfigurationPreflight
     static PantsCloudValidationFinding Unverified(
         CloudStorageLocations.Item item,
         PantsCloudCheckCode code,
-        string message) => Finding(
+        string message
+    ) => Finding(
         item,
         code,
         PantsCloudCheckOutcome.Unverified,
@@ -306,7 +328,8 @@ static class CloudConfigurationPreflight
     static PantsCloudValidationFinding NotApplicable(
         CloudStorageLocations.Item item,
         PantsCloudCheckCode code,
-        string message) => Finding(
+        string message
+    ) => Finding(
         item,
         code,
         PantsCloudCheckOutcome.Warning,
@@ -320,7 +343,8 @@ static class CloudConfigurationPreflight
         PantsCloudCheckOutcome outcome,
         PantsCloudCheckSeverity severity,
         PantsCloudFailureKind failureKind,
-        string message) => new(
+        string message
+    ) => new(
         item.Location.Provider.Id,
         item.Roles,
         PantsCloudValidationMode.LivePreflight,
@@ -414,5 +438,6 @@ static class CloudConfigurationPreflight
     internal delegate ValueTask<ICloudObjectStore> StoreFactory(
         PantsCloudStorageLocation location,
         TimeSpan remaining,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }

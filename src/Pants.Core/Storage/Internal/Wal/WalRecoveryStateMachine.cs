@@ -22,8 +22,11 @@ sealed class WalRecoveryStateMachine : IDisposable
     ///     database's own cleanup owns them. <paramref name="ledger" />, when a local-storage budget
     ///     applies, is charged for every spooled byte until its transaction resolves.
     /// </summary>
-    public WalRecoveryStateMachine(string scratchDirectory, StorageBudgetLedger? ledger = null,
-        long? maximumReplayableTransactionBytes = null)
+    public WalRecoveryStateMachine(
+        string scratchDirectory,
+        StorageBudgetLedger? ledger = null,
+        long? maximumReplayableTransactionBytes = null
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scratchDirectory);
         _scratchDirectory = scratchDirectory;
@@ -39,17 +42,20 @@ sealed class WalRecoveryStateMachine : IDisposable
         }
 
         _disposed = true;
+
         foreach (var spool in _openTransactions.Values)
         {
             spool.Dispose();
         }
+
 
         _openTransactions.Clear();
     }
 
     public void Accept(
         WalRecord record,
-        Action<WalMutation, ulong> apply)
+        Action<WalMutation, ulong> apply
+    )
     {
         ArgumentNullException.ThrowIfNull(record);
         ArgumentNullException.ThrowIfNull(apply);
@@ -61,6 +67,7 @@ sealed class WalRecoveryStateMachine : IDisposable
             {
                 abandoned.Dispose();
             }
+
             _openTransactions.Clear();
             _pendingTransactions.Clear();
             _pendingBytes = 0;
@@ -74,10 +81,12 @@ sealed class WalRecoveryStateMachine : IDisposable
                 _maximumReplayableTransactionBytes ?? WalCodec.DefaultTransactionBatchReplayBudget,
                 out var commitSequence,
                 out _, configuredReplayLimit: _maximumReplayableTransactionBytes is not null);
+
             foreach (var mutation in mutations)
             {
                 apply(mutation, commitSequence);
             }
+
 
             return;
         }
@@ -126,10 +135,12 @@ sealed class WalRecoveryStateMachine : IDisposable
         }
 
         var key = (record.WriterEpoch, transactionId);
+
         if (_openTransactions.ContainsKey(key))
         {
             throw new StorageException("WAL contains a duplicate transaction begin record.");
         }
+
 
         ReservePending(key, 128);
         _openTransactions.Add(key, new WalRecoverySpool(_scratchDirectory, _ledger, record.ColumnFamilyId));
@@ -137,7 +148,8 @@ sealed class WalRecoveryStateMachine : IDisposable
 
     void AcceptCommit(
         WalRecord record,
-        Action<WalMutation, ulong> apply)
+        Action<WalMutation, ulong> apply
+    )
     {
         if (record.TransactionId is not { } transactionId ||
             !_openTransactions.Remove(
@@ -147,10 +159,12 @@ sealed class WalRecoveryStateMachine : IDisposable
             return;
         }
 
+
         if (_pendingTransactions.Remove((record.WriterEpoch, transactionId), out var pendingBytes))
         {
             _pendingBytes -= pendingBytes;
         }
+
         using (spool)
         {
             if (record.ColumnFamilyId != spool.ColumnFamilyId)
@@ -168,10 +182,13 @@ sealed class WalRecoveryStateMachine : IDisposable
         {
             return;
         }
+
+
         if (bytes > limit - _pendingBytes)
         {
             throw new PantsResourceLimitException("Uncommitted WAL transactions exceed the configured replay buffer limit.");
         }
+
         _pendingBytes += bytes;
         _pendingTransactions[key] = _pendingTransactions.GetValueOrDefault(key) + bytes;
     }
@@ -179,7 +196,8 @@ sealed class WalRecoveryStateMachine : IDisposable
     static void ApplyMutation(
         WalRecord record,
         ulong commitSequence,
-        Action<WalMutation, ulong> apply)
+        Action<WalMutation, ulong> apply
+    )
     {
         if (!WalCodec.TryDecodeMutation(record, out var mutation))
         {

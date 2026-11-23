@@ -33,6 +33,7 @@ sealed class CrashSoakKillSwitch(CrashSoakLedgerWriter ledger, CrashSoakCrashPla
     public void Kill(string reason)
     {
         ledger.Killing(reason);
+
         try
         {
             using var process = Process.GetCurrentProcess();
@@ -43,6 +44,7 @@ sealed class CrashSoakKillSwitch(CrashSoakLedgerWriter ledger, CrashSoakCrashPla
         {
             // FailFast below still ends the process without running any shutdown path.
         }
+
 
         Environment.FailFast($"Crash/soak child killed: {reason}");
     }

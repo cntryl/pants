@@ -26,13 +26,16 @@ sealed class NonDecreasingPantsClock : IPantsClock
         get
         {
             var observed = _inner.UtcNow.UtcTicks;
+
             while (true)
             {
                 var latest = Volatile.Read(ref _latestUtcTicks);
+
                 if (observed <= latest)
                 {
                     return new DateTimeOffset(latest, TimeSpan.Zero);
                 }
+
 
                 if (Interlocked.CompareExchange(ref _latestUtcTicks, observed, latest) == latest)
                 {

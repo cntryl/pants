@@ -8,10 +8,12 @@ sealed class WalWriterEpochFrontiers
     public void Record(WalRecord record, ulong ordinal)
     {
         ArgumentNullException.ThrowIfNull(record);
+
         if (record.WriterEpoch == 0)
         {
             return;
         }
+
 
         RecordMinimum(_firstSequenceByEpoch, record.WriterEpoch, record.Sequence);
         RecordMinimum(_firstOrdinalByEpoch, record.WriterEpoch, ordinal);
@@ -20,10 +22,12 @@ sealed class WalWriterEpochFrontiers
     public bool IsStale(WalRecord record, ulong ordinal)
     {
         ArgumentNullException.ThrowIfNull(record);
+
         if (record.WriterEpoch == 0)
         {
             return false;
         }
+
 
         foreach (var (epoch, firstSequence) in _firstSequenceByEpoch)
         {
@@ -45,7 +49,8 @@ sealed class WalWriterEpochFrontiers
     static void RecordMinimum(
         SortedDictionary<ulong, ulong> values,
         ulong epoch,
-        ulong candidate)
+        ulong candidate
+    )
     {
         if (!values.TryGetValue(epoch, out var current) || candidate < current)
         {

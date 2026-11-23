@@ -23,13 +23,16 @@ sealed class StartupScope : IDisposable
     public StartupScope(TimeSpan? budget, TimeProvider time, CancellationToken cancellationToken)
     {
         _callerCancellation = cancellationToken;
+
         if (budget is { } finite)
         {
             var started = time.GetTimestamp();
+
             if (finite.TotalSeconds * time.TimestampFrequency > long.MaxValue - (double)started)
             {
                 throw PantsException.InvalidArgument("Open timeout cannot be represented by a monotonic deadline.");
             }
+
             _deadline = OperationDeadline.FromStart(started, finite, time);
             _timer = time.CreateTimer(static state => ((StartupScope)state!).OnTimer(), this,
                 ClampTimer(_deadline.Remaining), Timeout.InfiniteTimeSpan);
@@ -38,6 +41,7 @@ sealed class StartupScope : IDisposable
         {
             _deadline = OperationDeadline.Unbounded;
         }
+
 
         _registration = cancellationToken.Register(static state => ((StartupScope)state!).Cancel(true), this);
     }
@@ -55,6 +59,7 @@ sealed class StartupScope : IDisposable
         {
             Cancel(false);
         }
+
         if (_cancelled.Task.IsCompletedSuccessfully)
         {
             ExceptionDispatchInfo.Capture(_cancelled.Task.Result).Throw();
@@ -67,10 +72,12 @@ sealed class StartupScope : IDisposable
         lock (_gate)
         {
             Check();
+
             if (_leasePublication)
             {
                 throw new PantsInternalException("A startup lease publication is already unresolved.");
             }
+
             _leasePublication = true;
         }
     }
@@ -97,15 +104,19 @@ sealed class StartupScope : IDisposable
         lock (_gate)
         {
             Check();
+
             if (!_prepared || _leasePublication)
             {
                 throw new PantsInternalException("Startup cannot admit an incomplete runtime.");
             }
+
             var actor = preparedRuntime() ?? throw new PantsInternalException("Startup readiness has no prepared runtime.");
+
             if (!actor.HasPreparedStartupAuthority)
             {
                 throw new PantsFencedException("Writer authority was lost before runtime admission.");
             }
+
             _accepted = true;
             _decision.TrySetResult(true);
             return actor;
@@ -120,6 +131,7 @@ sealed class StartupScope : IDisposable
             {
                 return;
             }
+
             Exception failure = _leasePublication
                 ? new PantsLeaseIndeterminateException("Startup ended while lease acquisition was unresolved.")
                 : callerCancelled
@@ -181,6 +193,7 @@ sealed class StartupScope : IDisposable
         {
             return;
         }
+
         _registration.Dispose();
         _timer?.Dispose();
         _cancellation.Dispose();

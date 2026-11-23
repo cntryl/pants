@@ -41,10 +41,12 @@ public sealed class PantsSstIndexTuningTests
             .ToArray();
         var structuredProfiler = new KeyStructureProfiler();
         var hashLikeProfiler = new KeyStructureProfiler();
+
         foreach (var key in structuredKeys)
         {
             structuredProfiler.Add(key);
         }
+
 
         foreach (var key in hashLikeKeys)
         {
@@ -71,7 +73,8 @@ public sealed class PantsSstIndexTuningTests
     public void ShouldChooseSparseGivenMidgeGuardrail(
         int keyCount,
         double entropy,
-        int prefixDivergence)
+        int prefixDivergence
+    )
     {
         var profile = new KeyStructureProfile(
             8,
@@ -181,10 +184,12 @@ public sealed class PantsSstIndexTuningTests
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             writer.Put(ReadOnlyMemory<byte>.Empty, TestBytes.FromString("empty-key"));
+
             for (var index = 0; index < keys.Length; index++)
             {
                 writer.Put(keys[index], values[index]);
             }
+
 
             await writer.CommitAsync(PantsWriteOptions.Sync);
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
@@ -204,6 +209,7 @@ public sealed class PantsSstIndexTuningTests
             Assert.Equal(
                 "empty-key",
                 TestBytes.ToText((await reader.GetAsync(ReadOnlyMemory<byte>.Empty))!.Value));
+
             for (var index = 0; index < keys.Length; index++)
             {
                 Assert.Equal(values[index], (await reader.GetAsync(keys[index]))!.Value.ToArray());
@@ -217,6 +223,7 @@ public sealed class PantsSstIndexTuningTests
         Assert.Equal(
             "empty-key",
             TestBytes.ToText((await reopenedReader.GetAsync(ReadOnlyMemory<byte>.Empty))!.Value));
+
         for (var index = 0; index < keys.Length; index++)
         {
             Assert.Equal(values[index], (await reopenedReader.GetAsync(keys[index]))!.Value.ToArray());

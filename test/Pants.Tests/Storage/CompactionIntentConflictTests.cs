@@ -72,6 +72,7 @@ public sealed class CompactionIntentConflictTests
         Assert.Contains("fenced", exception.Message, StringComparison.Ordinal);
         Assert.Equal(intentLogBefore, await File.ReadAllBytesAsync(intentLogPath));
         Assert.Equal(inputs, SstNames(directory.Path));
+
         foreach (var (name, bytes) in sstBefore)
         {
             Assert.Equal(bytes, await File.ReadAllBytesAsync(Path.Combine(directory.Path, "sst", name)));
@@ -83,6 +84,7 @@ public sealed class CompactionIntentConflictTests
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(root).WithBackgroundCompaction(false));
         var family = database.ColumnFamilies.DefaultFamily;
+
         for (var flush = 0; flush < 2; flush++)
         {
             await using (var transaction = await database.Transactions.BeginAsync(

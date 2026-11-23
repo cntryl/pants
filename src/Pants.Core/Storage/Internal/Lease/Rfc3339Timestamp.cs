@@ -19,6 +19,7 @@ static class Rfc3339Timestamp
     {
         value = default;
         var s = text.AsSpan();
+
         if (s.Length < 20 ||
             !TryDigits(s, 0, 4, out var year) || s[4] != '-' ||
             !TryDigits(s, 5, 2, out var month) || s[7] != '-' ||
@@ -30,6 +31,7 @@ static class Rfc3339Timestamp
             return false;
         }
 
+
         if (year < 1 || month is < 1 or > 12 || day < 1 || day > DateTime.DaysInMonth(year, month) ||
             hour > 23 || minute > 59 || second > 60)
         {
@@ -38,15 +40,18 @@ static class Rfc3339Timestamp
 
         var position = 19;
         long fractionTicks = 0;
+
         if (s[position] == '.')
         {
             position++;
             var start = position;
             var roundUp = false;
+
             while (position < s.Length && IsDigit(s[position]))
             {
                 var digit = s[position] - '0';
                 var index = position - start;
+
                 if (index < FractionDigitsPerTick)
                 {
                     fractionTicks = (fractionTicks * 10) + digit;
@@ -56,14 +61,18 @@ static class Rfc3339Timestamp
                     roundUp = true;
                 }
 
+
                 position++;
             }
 
+
             var count = position - start;
+
             if (count == 0)
             {
                 return false;
             }
+
 
             for (var index = count; index < FractionDigitsPerTick; index++)
             {
@@ -75,6 +84,7 @@ static class Rfc3339Timestamp
                 fractionTicks++;
             }
         }
+
 
         if (!TryParseOffset(s[position..], out var offset))
         {
@@ -92,10 +102,12 @@ static class Rfc3339Timestamp
             var local = new DateTime(year, month, day, hour, minute, second, DateTimeKind.Unspecified)
                 .AddTicks(fractionTicks);
             var utcTicks = local.Ticks - offset.Ticks;
+
             if (utcTicks < DateTime.MinValue.Ticks || utcTicks > DateTime.MaxValue.Ticks)
             {
                 return false;
             }
+
 
             value = new DateTimeOffset(utcTicks, TimeSpan.Zero);
             return true;
@@ -109,10 +121,12 @@ static class Rfc3339Timestamp
     static bool TryParseOffset(ReadOnlySpan<char> s, out TimeSpan offset)
     {
         offset = TimeSpan.Zero;
+
         if (s is ['Z' or 'z'])
         {
             return true;
         }
+
 
         if (s.Length != 6 || s[0] is not ('+' or '-') || s[3] != ':' ||
             !TryDigits(s, 1, 2, out var hours) || !TryDigits(s, 4, 2, out var minutes) ||
@@ -122,10 +136,12 @@ static class Rfc3339Timestamp
         }
 
         offset = new TimeSpan(hours, minutes, 0);
+
         if (s[0] == '-')
         {
             offset = -offset;
         }
+
 
         return true;
     }
@@ -133,6 +149,7 @@ static class Rfc3339Timestamp
     static bool TryDigits(ReadOnlySpan<char> s, int start, int count, out int value)
     {
         value = 0;
+
         for (var index = start; index < start + count; index++)
         {
             if (!IsDigit(s[index]))
@@ -142,6 +159,7 @@ static class Rfc3339Timestamp
 
             value = (value * 10) + (s[index] - '0');
         }
+
 
         return true;
     }

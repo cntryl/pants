@@ -15,12 +15,15 @@ static class MidgeCompatibilityFixture
             "Midge",
             PinnedSha,
             fixtureName);
+
         if (!Directory.Exists(sourcePath))
         {
             throw new DirectoryNotFoundException($"Missing committed Midge compatibility fixture: {sourcePath}");
         }
 
+
         var directory = new TemporaryDirectory();
+
         try
         {
             foreach (var sourceFilePath in Directory.EnumerateFiles(

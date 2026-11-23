@@ -171,10 +171,12 @@ public sealed class FileLeaseLongDurationTests
         lease.RenewWriteInterferenceHookForTesting = () =>
         {
             entered.TrySetResult();
+
             if (!allowReadback.Wait(TestTimeouts.Expected)) { throw new TimeoutException("The held renewal was not released."); }
         };
         time.Advance(TimeSpan.FromSeconds(20));
         var renewal = Task.Run(lease.RenewForTesting);
+
         try
         {
             await entered.Task.WaitAsync(TestTimeouts.Expected);
@@ -187,6 +189,7 @@ public sealed class FileLeaseLongDurationTests
         {
             allowReadback.Set();
         }
+
         Assert.False(await renewal.WaitAsync(TestTimeouts.Expected));
         await released.Task.WaitAsync(TestTimeouts.Expected);
         using var successor = FileLease.Acquire(directory.Path, 0, TimeSpan.Zero, null, TimeSpan.FromHours(1),
@@ -233,10 +236,12 @@ public sealed class FileLeaseLongDurationTests
         void Record(TimeSpan due, TimeSpan period)
         {
             Requests.Enqueue((due, period));
+
             if (due != Timeout.InfiniteTimeSpan && (due < TimeSpan.Zero || due > MaximumTimerDelay))
             {
                 throw new ArgumentOutOfRangeException(nameof(due), "The test clock rejects uncapped timer due times.");
             }
+
             if (period != Timeout.InfiniteTimeSpan && (period < TimeSpan.Zero || period > MaximumTimerDelay))
             {
                 throw new ArgumentOutOfRangeException(nameof(period), "The test clock rejects uncapped periodic timers.");
@@ -264,7 +269,9 @@ public sealed class FileLeaseLongDurationTests
             public bool Change(TimeSpan dueTime, TimeSpan period)
             {
                 owner.Record(dueTime, period);
+
                 if (dueTime != Timeout.InfiniteTimeSpan) { InitialDue ??= dueTime; }
+
                 return Inner.Change(dueTime, period);
             }
             public void Dispose()

@@ -13,6 +13,7 @@ public sealed class PantsRepairSharedWriteRateTests
         using var directory = new TemporaryDirectory();
         var sstDirectory = Directory.CreateDirectory(Path.Combine(directory.Path, "sst"));
         var files = new List<FileMeta>();
+
         for (var index = 0; index < 9; index++)
         {
             var sequence = checked((ulong)(index * 4 + 1));
@@ -39,6 +40,7 @@ public sealed class PantsRepairSharedWriteRateTests
                 LargestSequence = sequence + 3
             });
         }
+
         var manifest = new ManifestState
         {
             LastPersistedSequence = 36,
@@ -73,6 +75,7 @@ public sealed class PantsRepairSharedWriteRateTests
                 await writer.CommitAsync(PantsWriteOptions.Sync);
             }
             var flush = database.Maintenance.FlushAsync(concurrent).AsTask();
+
             try
             {
                 var concurrentFlush = await probe.NextAsync();
@@ -96,11 +99,14 @@ public sealed class PantsRepairSharedWriteRateTests
             {
                 probe.Continue();
             }
+
             await Task.WhenAll(repair, flush).WaitAsync(TestTimeouts.Expected);
             var reports = probe.Reservations.OrderBy(static item => item.StartedAt).ThenBy(static item => item.Until).ToArray();
             Assert.All(reports, item => Assert.InRange(item.Bytes, 1, 64 * 1024));
             Assert.Contains(reports, static item => item.Bytes == 64 * 1024);
+
             for (var index = 1; index < reports.Length; index++) { Assert.True(reports[index].StartedAt >= reports[index - 1].Until); }
+
             Assert.True(probe.FinalCompactionWaitObserved);
             var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(checked((ulong)reports.Sum(static item => (long)item.Bytes)), metrics.BackgroundRateLimitedBytes);
@@ -110,10 +116,12 @@ public sealed class PantsRepairSharedWriteRateTests
         }
         await using var reopened = await PantsDatabase.OpenAsync(options);
         await using var reader = await reopened.Transactions.BeginAsync(reopened.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 9; index++)
         {
             Assert.Equal(TestBytes.FromString($"value-{index}"), (await reader.GetAsync(TestBytes.FromString($"key-{index}")))?.ToArray());
         }
+
         Assert.Null(await reader.GetAsync("m"u8.ToArray()));
         var reopenedConcurrent = Assert.IsAssignableFrom<IPantsColumnFamily>(await reopened.ColumnFamilies.GetAsync("concurrent"));
         await using var flushReader = await reopened.Transactions.BeginAsync(reopenedConcurrent, PantsTransactionMode.ReadOnly);
@@ -146,15 +154,18 @@ public sealed class PantsRepairSharedWriteRateTests
             var thread = Environment.CurrentManagedThreadId;
             Interlocked.CompareExchange(ref _compactionThread, thread, 0);
             var paths = Directory.EnumerateFiles(staging).Select(Path.GetFileName).ToArray();
+
             if (thread == Volatile.Read(ref _compactionThread) && paths.Any(name => name!.Contains("000000_", StringComparison.Ordinal)))
             {
                 Volatile.Write(ref _finalCompactionWaitObserved, 1);
             }
+
             var report = new Reservation(bytes, startedAt, until, thread,
                 paths.Any(name => name!.StartsWith("repair.", StringComparison.Ordinal)),
                 paths.Any(name => name!.Contains("000001_", StringComparison.Ordinal)));
             _reservations.Enqueue(report);
             _events.Writer.TryWrite(report);
+
             if (Volatile.Read(ref _continuing) != 0) { clock.Advance(TimeSpan.FromSeconds(1)); }
         }
     }

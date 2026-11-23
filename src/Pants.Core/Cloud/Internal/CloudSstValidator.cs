@@ -13,6 +13,7 @@ static class CloudSstValidator
         }
 
         SstContents contents;
+
         try
         {
             contents = SstCodec.Decode(data.ToArray());
@@ -23,6 +24,7 @@ static class CloudSstValidator
                 $"Cloud SST '{file.Name}' is structurally corrupt.",
                 exception);
         }
+
 
         SstManifestMetadataValidator.Validate(contents, file, "Cloud SST");
     }

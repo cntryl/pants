@@ -7,7 +7,8 @@ static class CompactionOutputPartitioner
 
     public static IReadOnlyList<CompactionMergeResult> Partition(
         CompactionMergeResult merged,
-        long targetSizeBytes)
+        long targetSizeBytes
+    )
     {
         if (targetSizeBytes == 0)
         {
@@ -15,17 +16,21 @@ static class CompactionOutputPartitioner
         }
 
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(targetSizeBytes);
+
         if (merged.Entries.Count == 0)
         {
             return PartitionRangeTombstones(merged.RangeTombstones, targetSizeBytes);
         }
 
+
         var entryPartitions = new List<List<SstEntry>>();
         var entries = new List<SstEntry>();
         long estimatedBytes = 0;
+
         foreach (var entry in merged.Entries)
         {
             long entryBytes = checked(entry.Key.Length + (entry.Value?.Length ?? 0) + EntryOverheadBytes);
+
             if (entries.Count > 0 &&
                 estimatedBytes + entryBytes > targetSizeBytes &&
                 ByteArrayComparer.Instance.Compare(entries[^1].Key, entry.Key) != 0)
@@ -35,9 +40,11 @@ static class CompactionOutputPartitioner
                 estimatedBytes = 0;
             }
 
+
             entries.Add(entry);
             estimatedBytes = checked(estimatedBytes + entryBytes);
         }
+
 
         entryPartitions.Add(entries);
         return entryPartitions.Select((partition, index) => CreatePartition(
@@ -49,7 +56,8 @@ static class CompactionOutputPartitioner
 
     static List<CompactionMergeResult> PartitionRangeTombstones(
         IReadOnlyList<RangeTombstone> ranges,
-        long targetSizeBytes)
+        long targetSizeBytes
+    )
     {
         if (ranges.Count == 0)
         {
@@ -59,10 +67,12 @@ static class CompactionOutputPartitioner
         var partitions = new List<CompactionMergeResult>();
         var partition = new List<RangeTombstone>();
         long estimatedBytes = 0;
+
         foreach (var range in ranges)
         {
             long rangeBytes = checked(
                 range.Start.Length + range.End.Length + RangeTombstoneOverheadBytes);
+
             if (partition.Count > 0 && estimatedBytes + rangeBytes > targetSizeBytes)
             {
                 partitions.Add(new CompactionMergeResult([], partition.ToArray()));
@@ -70,9 +80,11 @@ static class CompactionOutputPartitioner
                 estimatedBytes = 0;
             }
 
+
             partition.Add(range);
             estimatedBytes = checked(estimatedBytes + rangeBytes);
         }
+
 
         partitions.Add(new CompactionMergeResult([], partition.ToArray()));
         return partitions;
@@ -82,7 +94,8 @@ static class CompactionOutputPartitioner
         List<SstEntry> entries,
         IReadOnlyList<RangeTombstone> ranges,
         byte[]? regionStart,
-        byte[]? regionEnd)
+        byte[]? regionEnd
+    )
     {
         var overlappingRanges = ranges
             .Where(range =>

@@ -82,17 +82,20 @@ public sealed class DecoderFuzzTests
     {
         var root = Path.Combine(AppContext.BaseDirectory, "Fixtures", "Compatibility");
         var seeds = new List<byte[]>();
+
         foreach (var pattern in patterns)
         {
             foreach (var path in Directory.EnumerateFiles(root, pattern, SearchOption.AllDirectories))
             {
                 var bytes = File.ReadAllBytes(path);
+
                 if (bytes.Length is > 0 and <= 1024 * 1024)
                 {
                     seeds.Add(bytes);
                 }
             }
         }
+
 
         Assert.NotEmpty(seeds);
         return seeds;

@@ -180,11 +180,13 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
 
         Assert.Equal(1, failpoint.HitCount);
         Assert.All(shutdowns, static shutdown => Assert.False(shutdown.IsCompleted));
+
         foreach (var deadlineShutdown in deadlineShutdowns)
         {
             var timeout = await Assert.ThrowsAsync<PantsTimeoutException>(() => deadlineShutdown);
             Assert.Equal(PantsErrorCode.Timeout, timeout.Code);
         }
+
 
         Assert.All(shutdowns, static shutdown => Assert.False(shutdown.IsCompleted));
         Assert.Equal(1, failpoint.HitCount);
@@ -203,6 +205,7 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
             PantsOpenOptions.Local(directory.Path).WithCoordinatorQueueCapacityForTesting(2),
             new RuntimeDependencies(failpoint));
         var transactions = new List<IPantsTransaction>();
+
         for (var index = 0; index < 10; index++)
         {
             var transaction = await database.Transactions.BeginAsync(
@@ -213,6 +216,7 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
                 TestBytes.FromString($"value-{index}"));
             transactions.Add(transaction);
         }
+
 
         var blocker = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
         await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
@@ -231,10 +235,12 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
         _ = await blocker.WaitAsync(TestTimeouts.Expected);
         var createdFamilies = await Task.WhenAll(families).WaitAsync(TestTimeouts.Expected);
         await Task.WhenAll(commits).WaitAsync(TestTimeouts.Expected);
+
         for (var index = 0; index < createdFamilies.Length; index++)
         {
             Assert.Equal($"queued-{index}", createdFamilies[index].Name);
         }
+
 
         foreach (var transaction in transactions)
         {
@@ -244,6 +250,7 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
         await using var read = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 10; index++)
         {
             Assert.Equal(
@@ -251,6 +258,7 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
                 TestBytes.ToText((await read.GetAsync(
                     TestBytes.FromString($"key-{index}")))!.Value));
         }
+
 
         await read.RollbackAsync();
         await database.ShutdownAsync(TestTimeouts.Expected);

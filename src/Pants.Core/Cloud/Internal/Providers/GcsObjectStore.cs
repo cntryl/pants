@@ -25,14 +25,17 @@ sealed class GcsObjectStore : CloudObjectStore
         HttpClient httpClient,
         TimeSpan timeout,
         HttpClient? credentialHttpClient = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null
+    )
     {
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+
         if (timeout < TimeSpan.FromMilliseconds(1))
         {
             throw PantsException.InvalidArgument("GCS operation timeout must be at least one millisecond.");
         }
+
 
         _endpoint = configuration.Endpoint ?? new Uri("https://storage.googleapis.com/", UriKind.Absolute);
         _prefix = NormalizePrefix(prefix);
@@ -43,6 +46,7 @@ sealed class GcsObjectStore : CloudObjectStore
             timeout,
             timeProvider ?? TimeProvider.System);
         _timeProvider = timeProvider ?? TimeProvider.System;
+
         if (_credential.HmacAccessId is not null && configuration.ApiStyle != PantsGcsApiStyle.Xml)
         {
             throw PantsException.InvalidArgument("GCS HMAC credentials require the XML API style.");
@@ -61,7 +65,8 @@ sealed class GcsObjectStore : CloudObjectStore
 
     public override async ValueTask<CloudObject?> GetAsync(
         string objectKey,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var response = await SendReadAsync(
             token => CreateObjectRequestAsync(
@@ -71,10 +76,12 @@ sealed class GcsObjectStore : CloudObjectStore
                 null,
                 token),
             cancellationToken).ConfigureAwait(false);
+
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
         }
+
 
         EnsureSuccess(response);
         var data = await response.Content.ReadAsByteArrayAsync(cancellationToken)
@@ -89,7 +96,8 @@ sealed class GcsObjectStore : CloudObjectStore
         string objectKey,
         ulong offset,
         int length,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         GetRangeCoreAsync(objectKey, offset, length, null, cancellationToken);
 
     internal override ValueTask<CloudObject?> GetRangeAsync(
@@ -97,7 +105,8 @@ sealed class GcsObjectStore : CloudObjectStore
         ulong offset,
         int length,
         CloudObjectMetadata expectedMetadata,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         GetRangeCoreAsync(objectKey, offset, length, expectedMetadata, cancellationToken);
 
     async ValueTask<CloudObject?> GetRangeCoreAsync(
@@ -105,7 +114,8 @@ sealed class GcsObjectStore : CloudObjectStore
         ulong offset,
         int length,
         CloudObjectMetadata? expectedMetadata,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ValidateRange(offset, length);
         using var response = await SendReadAsync(
@@ -126,10 +136,12 @@ sealed class GcsObjectStore : CloudObjectStore
             },
             expectedMetadata?.SizeBytes,
             cancellationToken).ConfigureAwait(false);
+
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
         }
+
 
         if (expectedMetadata is not null && response.StatusCode == HttpStatusCode.PreconditionFailed)
         {
@@ -139,10 +151,12 @@ sealed class GcsObjectStore : CloudObjectStore
         EnsureSuccess(response);
         var data = await response.Content.ReadAsByteArrayAsync(cancellationToken)
             .ConfigureAwait(false);
+
         if (data.Length != length)
         {
             throw new PantsIOException("GCS ranged GET returned an unexpected byte count.");
         }
+
 
         _ = response.Headers.ETag?.Tag ??
             throw new PantsIOException("GCS ranged GET response did not include an ETag.");
@@ -151,15 +165,18 @@ sealed class GcsObjectStore : CloudObjectStore
 
     public override async ValueTask<CloudObjectMetadata?> HeadAsync(
         string objectKey,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var response = await SendReadAsync(
             token => CreateHeadRequestAsync(objectKey, token),
             cancellationToken).ConfigureAwait(false);
+
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
         }
+
 
         EnsureSuccess(response);
         return _configuration.ApiStyle == PantsGcsApiStyle.Json
@@ -171,7 +188,8 @@ sealed class GcsObjectStore : CloudObjectStore
         string objectKey,
         ReadOnlyMemory<byte> data,
         CloudObjectWriteCondition condition,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(condition);
         using var response = await SendMutationAsync(
@@ -182,11 +200,13 @@ sealed class GcsObjectStore : CloudObjectStore
                 condition,
                 token),
             cancellationToken).ConfigureAwait(false);
+
         if (response.StatusCode == HttpStatusCode.PreconditionFailed &&
             await HasGcsPredicateFailureAsync(response, cancellationToken).ConfigureAwait(false))
         {
             return false;
         }
+
 
         EnsureSuccess(response);
         return true;
@@ -195,7 +215,8 @@ sealed class GcsObjectStore : CloudObjectStore
     public override async ValueTask<CloudObjectListPage> ListPageAsync(
         string prefix,
         string? continuationToken,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var fullPrefix = CombinePrefix(prefix);
         using var response = await SendReadAsync(
@@ -212,16 +233,19 @@ sealed class GcsObjectStore : CloudObjectStore
     public override async ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
         string objectKey,
         CloudObjectDeleteCondition condition,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(condition);
         using var response = await SendMutationAsync(
             token => CreateDeleteRequestAsync(objectKey, condition, token),
             cancellationToken).ConfigureAwait(false);
+
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return CloudObjectDeleteOutcome.NotFound;
         }
+
 
         if (response.StatusCode == HttpStatusCode.PreconditionFailed &&
             condition is PantsCloudObjectDeleteCondition.IfVersion &&
@@ -236,36 +260,42 @@ sealed class GcsObjectStore : CloudObjectStore
 
     ValueTask<HttpResponseMessage> SendReadAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         SendAsync(requestFactory, true, cancellationToken);
 
     ValueTask<HttpResponseMessage> SendReadAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
         ulong? expectedRangeObjectLength,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         SendAsync(requestFactory, true, expectedRangeObjectLength, cancellationToken);
 
     ValueTask<HttpResponseMessage> SendMutationAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         SendAsync(requestFactory, false, cancellationToken);
 
     ValueTask<HttpResponseMessage> SendAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
         bool retryTransientFailures,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         SendAsync(requestFactory, retryTransientFailures, null, cancellationToken);
 
     async ValueTask<HttpResponseMessage> SendAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
         bool retryTransientFailures,
         ulong? expectedRangeObjectLength,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var deadline = new CancellationTokenSource(_timeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             deadline.Token);
+
         for (var attempt = 1; ; attempt++)
         {
             try
@@ -277,6 +307,7 @@ sealed class GcsObjectStore : CloudObjectStore
                     expectedRangeObjectLength,
                     linked.Token,
                     cancellationToken).ConfigureAwait(false);
+
                 if (!retryTransientFailures && IsRetryable(response.StatusCode))
                 {
                     var statusCode = response.StatusCode;
@@ -284,6 +315,7 @@ sealed class GcsObjectStore : CloudObjectStore
                     throw new PantsIOException(
                         $"GCS mutation outcome is indeterminate after HTTP {(int)statusCode}.");
                 }
+
 
                 if (!retryTransientFailures ||
                     !CloudRetryPolicy.IsTransientStatus(response.StatusCode) ||
@@ -341,7 +373,8 @@ sealed class GcsObjectStore : CloudObjectStore
         string objectKey,
         ReadOnlyMemory<byte> data,
         CloudObjectWriteCondition? condition,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var fullKey = CombineKey(objectKey);
         var uri = _configuration.ApiStyle == PantsGcsApiStyle.Json
@@ -352,11 +385,13 @@ sealed class GcsObjectStore : CloudObjectStore
             ? HttpMethod.Post
             : method;
         var request = new HttpRequestMessage(requestMethod, uri);
+
         if (method == HttpMethod.Put)
         {
             request.Content = new ReadOnlyMemoryContent(data);
             request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
         }
+
 
         if (_configuration.ApiStyle == PantsGcsApiStyle.Xml)
         {
@@ -369,7 +404,8 @@ sealed class GcsObjectStore : CloudObjectStore
 
     async ValueTask<HttpRequestMessage> CreateHeadRequestAsync(
         string objectKey,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var fullKey = CombineKey(objectKey);
         var request = new HttpRequestMessage(
@@ -387,7 +423,8 @@ sealed class GcsObjectStore : CloudObjectStore
     async ValueTask<HttpRequestMessage> CreateListRequestAsync(
         string fullPrefix,
         string? continuationToken,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var uri = _configuration.ApiStyle == PantsGcsApiStyle.Json
             ? BuildJsonListUri(fullPrefix, continuationToken)
@@ -403,7 +440,8 @@ sealed class GcsObjectStore : CloudObjectStore
     async ValueTask<HttpRequestMessage> CreateDeleteRequestAsync(
         string objectKey,
         CloudObjectDeleteCondition condition,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var fullKey = CombineKey(objectKey);
         var request = new HttpRequestMessage(
@@ -411,6 +449,7 @@ sealed class GcsObjectStore : CloudObjectStore
             _configuration.ApiStyle == PantsGcsApiStyle.Json
                 ? BuildJsonDeleteUri(fullKey, condition)
                 : BuildXmlUri(fullKey));
+
         if (_configuration.ApiStyle == PantsGcsApiStyle.Xml &&
             condition is PantsCloudObjectDeleteCondition.IfVersion expected)
         {
@@ -425,6 +464,7 @@ sealed class GcsObjectStore : CloudObjectStore
                 "The cloud object delete condition is invalid.");
         }
 
+
         await AuthorizeAsync(
             request,
             ReadOnlyMemory<byte>.Empty,
@@ -435,7 +475,8 @@ sealed class GcsObjectStore : CloudObjectStore
     async ValueTask AuthorizeAsync(
         HttpRequestMessage request,
         ReadOnlyMemory<byte> payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         EnsureXmlBodylessFraming(request);
 
@@ -468,7 +509,8 @@ sealed class GcsObjectStore : CloudObjectStore
     Uri BuildJsonUri(
         HttpMethod method,
         string fullKey,
-        CloudObjectWriteCondition? condition)
+        CloudObjectWriteCondition? condition
+    )
     {
         var bucket = Uri.EscapeDataString(_configuration.Bucket);
         var escapedName = Uri.EscapeDataString(fullKey);
@@ -482,10 +524,12 @@ sealed class GcsObjectStore : CloudObjectStore
             PantsCloudObjectWriteCondition.IfVersion expected => expected.Version,
             _ => throw PantsException.InvalidArgument("The cloud object write condition is invalid.")
         };
+
         if (generation is not null)
         {
             relative += $"&ifGenerationMatch={Uri.EscapeDataString(generation)}";
         }
+
 
         return new Uri($"{_endpoint.AbsoluteUri.TrimEnd('/')}/{relative}", UriKind.Absolute);
     }
@@ -498,6 +542,7 @@ sealed class GcsObjectStore : CloudObjectStore
     Uri BuildJsonDeleteUri(string fullKey, CloudObjectDeleteCondition condition)
     {
         var builder = new UriBuilder(BuildJsonMetadataUri(fullKey));
+
         switch (condition)
         {
             case PantsCloudObjectDeleteCondition.Unconditional:
@@ -510,6 +555,7 @@ sealed class GcsObjectStore : CloudObjectStore
                 throw PantsException.InvalidArgument(
                     "The cloud object delete condition is invalid.");
         }
+
 
         return builder.Uri;
     }
@@ -549,14 +595,17 @@ sealed class GcsObjectStore : CloudObjectStore
         string prefix,
         string tokenName,
         string? continuationToken,
-        string pageSizeName)
+        string pageSizeName
+    )
     {
         var query = $"{Uri.EscapeDataString(prefixName)}={Uri.EscapeDataString(prefix)}";
+
         if (continuationToken is not null)
         {
             query += $"&{Uri.EscapeDataString(tokenName)}=" +
                      Uri.EscapeDataString(continuationToken);
         }
+
 
         return $"{query}&{Uri.EscapeDataString(pageSizeName)}=" +
                CloudObjectStore.MaximumListPageKeys.ToString(CultureInfo.InvariantCulture);
@@ -564,7 +613,8 @@ sealed class GcsObjectStore : CloudObjectStore
 
     static void ApplyXmlCondition(
         HttpRequestMessage request,
-        CloudObjectWriteCondition? condition)
+        CloudObjectWriteCondition? condition
+    )
     {
         switch (condition)
         {
@@ -587,6 +637,7 @@ sealed class GcsObjectStore : CloudObjectStore
     static void ValidateRange(ulong offset, int length)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(length);
+
         if (offset > long.MaxValue || offset > (ulong)(long.MaxValue - length + 1))
         {
             throw PantsException.InvalidArgument("The cloud object range is too large.");
@@ -595,19 +646,24 @@ sealed class GcsObjectStore : CloudObjectStore
 
     static async ValueTask<CloudObjectMetadata> ReadJsonMetadataAsync(
         HttpResponseMessage response,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var body = await response.Content.ReadAsStringAsync(cancellationToken)
             .ConfigureAwait(false);
+
         try
         {
             using var document = JsonDocument.Parse(body);
+
             if (document.RootElement.ValueKind != JsonValueKind.Object)
             {
                 throw new PantsIOException("GCS JSON metadata response must be an object.");
             }
 
+
             var sizeText = ReadRequiredJsonString(document.RootElement, "size", "metadata");
+
             if (!ulong.TryParse(
                     sizeText,
                     NumberStyles.None,
@@ -618,11 +674,13 @@ sealed class GcsObjectStore : CloudObjectStore
                     $"GCS JSON metadata response has invalid size '{sizeText}'.");
             }
 
+
             var etag = ReadRequiredJsonString(document.RootElement, "etag", "metadata");
             var generation = ValidateGeneration(
                 ReadRequiredJsonString(document.RootElement, "generation", "metadata"),
                 "metadata");
             DateTimeOffset? lastModified = null;
+
             if (document.RootElement.TryGetProperty("updated", out var updated))
             {
                 if (updated.ValueKind != JsonValueKind.String ||
@@ -638,6 +696,7 @@ sealed class GcsObjectStore : CloudObjectStore
 
                 lastModified = parsed;
             }
+
 
             return new CloudObjectMetadata(size, etag, generation, lastModified);
         }
@@ -667,12 +726,15 @@ sealed class GcsObjectStore : CloudObjectStore
         try
         {
             using var document = JsonDocument.Parse(body);
+
             if (document.RootElement.ValueKind != JsonValueKind.Object)
             {
                 throw new PantsIOException("GCS LIST JSON response must be an object.");
             }
 
+
             var objectKeys = Array.Empty<string>();
+
             if (document.RootElement.TryGetProperty("items", out var items))
             {
                 if (items.ValueKind != JsonValueKind.Array)
@@ -692,7 +754,9 @@ sealed class GcsObjectStore : CloudObjectStore
                     .ToArray();
             }
 
+
             string? nextPageToken = null;
+
             if (document.RootElement.TryGetProperty("nextPageToken", out var token))
             {
                 if (token.ValueKind != JsonValueKind.String)
@@ -703,6 +767,7 @@ sealed class GcsObjectStore : CloudObjectStore
 
                 nextPageToken = token.GetString();
             }
+
 
             return new CloudObjectListPage(
                 objectKeys,
@@ -728,10 +793,12 @@ sealed class GcsObjectStore : CloudObjectStore
             .FirstOrDefault(static element => element.Name.LocalName == "NextMarker")?
             .Value;
         nextMarker = string.IsNullOrEmpty(nextMarker) ? null : nextMarker;
+
         if (truncated && nextMarker is null)
         {
             nextMarker = remoteKeys.LastOrDefault();
         }
+
 
         if (truncated && string.IsNullOrEmpty(nextMarker))
         {
@@ -746,11 +813,13 @@ sealed class GcsObjectStore : CloudObjectStore
 
     async ValueTask<bool> HasGcsPredicateFailureAsync(
         HttpResponseMessage response,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var body = await response.Content.ReadAsStringAsync(cancellationToken)
             .ConfigureAwait(false);
         string? reason;
+
         if (_configuration.ApiStyle == PantsGcsApiStyle.Xml)
         {
             reason = CloudProviderXml.TryReadElementValue(body, "Code");
@@ -775,6 +844,7 @@ sealed class GcsObjectStore : CloudObjectStore
             }
         }
 
+
         return reason is not null &&
                (reason.Equals("conditionNotMet", StringComparison.OrdinalIgnoreCase) ||
                 reason.Equals("PreconditionFailed", StringComparison.OrdinalIgnoreCase));
@@ -783,7 +853,8 @@ sealed class GcsObjectStore : CloudObjectStore
     static string ReadRequiredJsonString(
         JsonElement value,
         string propertyName,
-        string operation) =>
+        string operation
+    ) =>
         value.TryGetProperty(propertyName, out var property) &&
         property.ValueKind == JsonValueKind.String &&
         !string.IsNullOrWhiteSpace(property.GetString())
@@ -840,7 +911,8 @@ sealed class GcsObjectStore : CloudObjectStore
         HttpRequestMessage request,
         string accessId,
         string secret,
-        string date)
+        string date
+    )
     {
         var canonicalHeaders = string.Concat(request.Headers
             .Where(static header =>
@@ -868,6 +940,7 @@ sealed class GcsObjectStore : CloudObjectStore
             date,
             canonicalHeaders + request.RequestUri!.AbsolutePath);
         byte[] key;
+
         try
         {
             key = Convert.FromBase64String(secret);
@@ -876,6 +949,7 @@ sealed class GcsObjectStore : CloudObjectStore
         {
             key = Encoding.UTF8.GetBytes(secret);
         }
+
 
         using var hmac = IncrementalHash.CreateHMAC(HashAlgorithmName.SHA1, key);
         hmac.AppendData(Encoding.UTF8.GetBytes(stringToSign));
@@ -940,11 +1014,13 @@ sealed class GcsObjectStore : CloudObjectStore
     static string NormalizeListPrefix(string prefix)
     {
         ArgumentNullException.ThrowIfNull(prefix);
+
         if (prefix.StartsWith('/') || prefix.Contains('\\') ||
             prefix.Split('/').Any(static segment => segment is "." or ".."))
         {
             throw new PantsInvalidArgumentException("Cloud object list prefix is unsafe.");
         }
+
 
         return prefix;
     }

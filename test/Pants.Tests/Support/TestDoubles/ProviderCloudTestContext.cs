@@ -9,7 +9,8 @@ sealed class ProviderCloudTestContext : IAsyncDisposable
         TemporaryDirectory cache,
         InMemoryAzureBlobHandler handler,
         HttpClient client,
-        IPantsDatabase database)
+        IPantsDatabase database
+    )
     {
         _cache = cache;
         Handler = handler;
@@ -33,6 +34,7 @@ sealed class ProviderCloudTestContext : IAsyncDisposable
         var cache = new TemporaryDirectory();
         var handler = new InMemoryAzureBlobHandler();
         var client = new HttpClient(handler);
+
         try
         {
             var location = new PantsCloudStorageLocation(

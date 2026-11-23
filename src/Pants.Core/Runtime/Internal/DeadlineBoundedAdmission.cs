@@ -17,13 +17,16 @@ static class DeadlineBoundedAdmission
         T command,
         OperationDeadline deadline,
         TimeProvider timeProvider,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
+
         if (writer.TryWrite(command))
         {
             return true;
         }
+
 
         if (!deadline.IsBounded)
         {
@@ -32,6 +35,7 @@ static class DeadlineBoundedAdmission
         }
 
         using var expiry = new OperationDeadlineCancellation(deadline, timeProvider, cancellationToken);
+
         try
         {
             await writer.WriteAsync(command, expiry.Token).ConfigureAwait(false);

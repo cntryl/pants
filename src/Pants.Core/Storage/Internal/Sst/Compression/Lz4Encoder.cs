@@ -65,12 +65,15 @@ static class Lz4Encoder
                 var hash = Hash(input, current, useSmallHash);
                 candidate = Get(hashTable, hash);
                 Put(hashTable, hash, current);
+
                 if (current - candidate > MaximumDistance)
                 {
                     continue;
                 }
 
+
                 offset = checked((ushort)(current - candidate));
+
                 if (BinaryPrimitives.ReadUInt32LittleEndian(input[candidate..]) ==
                     BinaryPrimitives.ReadUInt32LittleEndian(input[current..]))
                 {
@@ -93,18 +96,22 @@ static class Lz4Encoder
 
             Put(hashTable, Hash(input, current - 2, useSmallHash), current - 2);
             output.WriteByte(CreateToken(literalLength, duplicateLength));
+
             if (literalLength >= 0x0f)
             {
                 WriteInteger(output, literalLength - 0x0f);
             }
 
+
             output.Write(input[literalStart..(literalStart + literalLength)]);
             BinaryPrimitives.WriteUInt16LittleEndian(offsetBytes, offset);
             output.Write(offsetBytes);
+
             if (duplicateLength >= 0x0f)
             {
                 WriteInteger(output, duplicateLength - 0x0f);
             }
+
 
             literalStart = current;
         }
@@ -116,11 +123,13 @@ static class Lz4Encoder
             input.Length - (current + EndOffset),
             input.Length - candidate);
         var start = current;
+
         while (current < inputEnd && input[current] == input[candidate])
         {
             current++;
             candidate++;
         }
+
 
         return current - start;
     }
@@ -163,10 +172,12 @@ static class Lz4Encoder
     {
         var literalLength = input.Length - start;
         output.WriteByte(checked((byte)(literalLength < 0x0f ? literalLength << 4 : 0xf0)));
+
         if (literalLength >= 0x0f)
         {
             WriteInteger(output, literalLength - 0x0f);
         }
+
 
         output.Write(input[start..]);
     }

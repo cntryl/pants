@@ -54,12 +54,14 @@ public sealed class PantsReadAmplificationContractTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
+
         for (var generation = 0; generation < 11; generation++)
         {
             await FlushBookendedGenerationAsync(database, generation);
         }
 
         // Every file spans the key but none holds it, so no source decides the read early.
+
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
@@ -83,10 +85,12 @@ public sealed class PantsReadAmplificationContractTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
+
         for (var generation = 0; generation < 3; generation++)
         {
             await FlushBookendedGenerationAsync(database, generation);
         }
+
 
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -108,19 +112,23 @@ public sealed class PantsReadAmplificationContractTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
+
         for (var generation = 0; generation < 2; generation++)
         {
             await FlushGenerationAsync(database, generation);
         }
 
         // The newest L0 file decides every read, so each read touches exactly one SST.
+
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var read = 0; read < 10; read++)
         {
             Assert.NotNull(await reader.GetAsync("hot-key"u8.ToArray()));
         }
+
 
         var metrics = await database.Diagnostics.GetReadAmplificationMetricsAsync();
         Assert.Equal(10, metrics.ReadsTotal);
@@ -138,10 +146,12 @@ public sealed class PantsReadAmplificationContractTests
             PantsOpenOptions.Local(directory.Path)
                 .WithPerformanceGoal(PantsPerformanceGoal.Throughput)
                 .WithWorkloadProfile(PantsWorkloadProfile.WriteHeavy));
+
         for (var generation = 0; generation < 6; generation++)
         {
             await FlushBookendedGenerationAsync(database, generation);
         }
+
 
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -161,21 +171,26 @@ public sealed class PantsReadAmplificationContractTests
 
     static async ValueTask<PantsRuntimeMetrics> WaitForRuntimeMetricsAsync(
         IPantsDatabase database,
-        Func<PantsRuntimeMetrics, bool> predicate)
+        Func<PantsRuntimeMetrics, bool> predicate
+    )
     {
         var started = Stopwatch.GetTimestamp();
+
         while (Stopwatch.GetElapsedTime(started) < TestTimeouts.Expected)
         {
             var metrics = await database.Diagnostics.GetRuntimeMetricsAsync()
                 .AsTask()
                 .WaitAsync(TestTimeouts.Expected);
+
             if (predicate(metrics))
             {
                 return metrics;
             }
 
+
             await Task.Delay(TimeSpan.FromMilliseconds(10));
         }
+
 
         throw new TimeoutException("Read-amplification compaction did not complete.");
     }

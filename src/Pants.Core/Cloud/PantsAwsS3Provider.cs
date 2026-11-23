@@ -11,7 +11,8 @@ public sealed record PantsAwsS3Provider(
 
     public ValueTask<IPantsCloudObjectStore> OpenObjectStoreAsync(
         PantsCloudProviderContext context,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentNullException.ThrowIfNull(context);
         cancellationToken.ThrowIfCancellationRequested();

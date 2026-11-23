@@ -225,7 +225,8 @@ public sealed class ProviderHttpAttemptObservationTests
     {
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
-            CancellationToken cancellationToken) => responseFactory(request, cancellationToken);
+            CancellationToken cancellationToken
+        ) => responseFactory(request, cancellationToken);
     }
 
     sealed class ChunkedContent(byte[] content) : HttpContent
@@ -236,7 +237,8 @@ public sealed class ProviderHttpAttemptObservationTests
         protected override Task SerializeToStreamAsync(
             Stream stream,
             TransportContext? context,
-            CancellationToken cancellationToken) => stream.WriteAsync(content, cancellationToken).AsTask();
+            CancellationToken cancellationToken
+        ) => stream.WriteAsync(content, cancellationToken).AsTask();
 
         protected override bool TryComputeLength(out long length)
         {

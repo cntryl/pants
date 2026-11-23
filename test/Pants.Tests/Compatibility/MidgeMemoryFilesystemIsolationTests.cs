@@ -27,6 +27,7 @@ public sealed class MidgeMemoryFilesystemIsolationTests
             start, "memory filesystem isolation child", TestTimeouts.Expected);
 
         Assert.True(child.ExitCode == 0, await child.DescribeAsync());
+
         if (persistentControl)
         {
             Assert.NotEmpty(Directory.EnumerateFileSystemEntries(directory.Path));
@@ -42,6 +43,7 @@ public sealed class MidgeMemoryFilesystemIsolationTests
     public async Task ShouldExerciseTheSelectedBackendInChild()
     {
         var directory = Environment.GetEnvironmentVariable(DirectoryVariable);
+
         if (directory is null)
         {
             return;
@@ -49,6 +51,7 @@ public sealed class MidgeMemoryFilesystemIsolationTests
 
         // Only the isolated child changes its current directory. The parent suite can run
         // concurrently without observing a process-wide directory mutation.
+
         Directory.SetCurrentDirectory(directory);
         Assert.Empty(Directory.EnumerateFileSystemEntries(directory));
         var persistentControl = Environment.GetEnvironmentVariable(BackendVariable) == "local";
@@ -91,6 +94,7 @@ public sealed class MidgeMemoryFilesystemIsolationTests
         await using var reopened = await PantsDatabase.OpenAsync(options);
         var families = await reopened.ColumnFamilies.ListAsync();
         Assert.Equal(persistentControl, families.Any(family => family.Name == "isolation"));
+
         if (!persistentControl)
         {
             Assert.Empty(Directory.EnumerateFileSystemEntries(directory));

@@ -236,6 +236,7 @@ public sealed class PantsCompactionKeyGroupParityTests
         var readers = contents
             .Select((content, index) => OpenReader(directory.Path, $"input-{index}.sst", content))
             .ToArray();
+
         try
         {
             var partitions = StreamingCompactionMerger.MergeAndPartition(
@@ -288,7 +289,8 @@ public sealed class PantsCompactionKeyGroupParityTests
     static CompactionPlan Plan(
         ulong? horizon = null,
         bool pointGcEligible = true,
-        bool rangeGcEligible = true) => new(
+        bool rangeGcEligible = true
+    ) => new(
         0,
         1,
         0,
@@ -299,7 +301,8 @@ public sealed class PantsCompactionKeyGroupParityTests
 
     static void AssertEntries(
         IReadOnlyList<CompactionMergeResult> results,
-        params (string Key, string? Value, ulong Sequence, bool IsDelete)[] expected)
+        params (string Key, string? Value, ulong Sequence, bool IsDelete)[] expected
+    )
     {
         foreach (var result in results)
         {
@@ -309,7 +312,8 @@ public sealed class PantsCompactionKeyGroupParityTests
 
     static void AssertRanges(
         IReadOnlyList<CompactionMergeResult> results,
-        params (string Start, string End, ulong Sequence)[] expected)
+        params (string Start, string End, ulong Sequence)[] expected
+    )
     {
         foreach (var result in results)
         {

@@ -13,7 +13,8 @@ sealed class TransactionOperationSource : ITransactionOperationSource, IDisposab
         IReadOnlyList<TransactionIntentOperation> residentOperations,
         ulong count,
         DateTimeOffset? commitTime,
-        bool ownsSpillStore = false)
+        bool ownsSpillStore = false
+    )
     {
         ArgumentNullException.ThrowIfNull(residentOperations);
 
@@ -47,10 +48,12 @@ sealed class TransactionOperationSource : ITransactionOperationSource, IDisposab
 
         var expectedOrdinal = 0UL;
         _spillStore?.ForEach(Visit);
+
         foreach (var operation in _residentOperations)
         {
             Visit(operation);
         }
+
 
         if (expectedOrdinal != Count)
         {
@@ -75,7 +78,8 @@ sealed class TransactionOperationSource : ITransactionOperationSource, IDisposab
 
     public ValueTask ForEachAsync(
         Func<TransactionIntentOperation, ValueTask> visitor,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(visitor);
         ForEach(operation =>
@@ -89,6 +93,7 @@ sealed class TransactionOperationSource : ITransactionOperationSource, IDisposab
     public TransactionIntentLookup? LatestBefore(ulong ordinal, ReadOnlySpan<byte> key)
     {
         var latest = _spillStore?.LatestBefore(ordinal, key);
+
         foreach (var operation in _residentOperations)
         {
             if (operation.Ordinal < ordinal)
@@ -96,6 +101,7 @@ sealed class TransactionOperationSource : ITransactionOperationSource, IDisposab
                 TransactionIntentLookup.Consider(ref latest, operation, key);
             }
         }
+
 
         return latest;
     }

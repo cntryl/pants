@@ -108,6 +108,7 @@ public sealed class ProviderWalCatalogMirrorTests
         var epoch = await lease.AcquireAsync(CancellationToken.None);
         var segments = new SortedDictionary<ulong, ProviderPublishedWalSegment>();
         var previous = WalChainLink.Genesis;
+
         for (ulong segmentId = 1; segmentId <= 400; segmentId++)
         {
             var sealedSegment = TestWalSegment.Create(segmentId, epoch, segmentId, $"{segmentId}.wal", [unchecked((byte)segmentId)], previous);
@@ -115,16 +116,19 @@ public sealed class ProviderWalCatalogMirrorTests
             previous = sealedSegment.Facts.Link;
         }
 
+
         var catalogBytes = JsonSerializer.SerializeToUtf8Bytes(
             new ProviderWalCatalog { FencingEpoch = epoch, Segments = segments },
             CatalogJsonOptions);
         var walStore = new ScriptedCloudObjectStore();
         var originalPrimary = primaryIsTorn ? "{ torn"u8.ToArray() : catalogBytes;
         walStore.Write(Primary, originalPrimary);
+
         if (primaryIsTorn)
         {
             walStore.Write(Mirror, catalogBytes);
         }
+
 
         var encodedReadBytes = checked(
             (long)originalPrimary.Length + (primaryIsTorn ? catalogBytes.Length : 0));
@@ -147,6 +151,7 @@ public sealed class ProviderWalCatalogMirrorTests
             persistence.FenceWalCatalogAsync(CancellationToken.None).AsTask());
 
         Assert.Equal(originalPrimary, walStore.Read(Primary));
+
         if (primaryIsTorn)
         {
             Assert.Equal(catalogBytes, walStore.Read(Mirror));
@@ -155,6 +160,7 @@ public sealed class ProviderWalCatalogMirrorTests
         {
             Assert.False(walStore.Contains(Mirror));
         }
+
         Assert.Equal(0, budget.Current);
         Assert.InRange(budget.Peak, 0, budget.Limit);
     }
@@ -165,6 +171,7 @@ public sealed class ProviderWalCatalogMirrorTests
         using var cache = new TemporaryDirectory();
         var walStore = new CountingCloudObjectStore();
         await PublishAsync(cache.Path, walStore);
+
         foreach (var key in new[] { Primary, Mirror })
         {
             _ = await walStore.DeleteAsync(
@@ -172,6 +179,7 @@ public sealed class ProviderWalCatalogMirrorTests
                 new PantsCloudObjectDeleteCondition.Unconditional(),
                 CancellationToken.None);
         }
+
 
         var exception = await Assert.ThrowsAsync<PantsRecoveryFailedException>(async () =>
             await HydrateAsync(cache.Path, walStore));
@@ -579,7 +587,8 @@ public sealed class ProviderWalCatalogMirrorTests
 
     static async ValueTask<ProviderCloudHydrationResult> HydrateAsync(
         string cachePath,
-        ICloudObjectStore walStore)
+        ICloudObjectStore walStore
+    )
     {
         var budget = new ResourceBudget(64L * 1024 * 1024);
         var gate = new MaintenanceMemoryGate();
@@ -611,7 +620,8 @@ public sealed class ProviderWalCatalogMirrorTests
 
     static ProviderWalCatalogStore CreateAdmittedCatalogStore(
         ICloudObjectStore walStore,
-        ResourceBudget budget) => new(
+        ResourceBudget budget
+    ) => new(
         walStore,
         static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
         static () => { },

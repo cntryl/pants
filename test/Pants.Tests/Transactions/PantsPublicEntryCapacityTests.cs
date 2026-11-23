@@ -38,6 +38,7 @@ public sealed class PantsPublicEntryCapacityTests
             {
                 rejected.Put("key"u8.ToArray(), value);
                 Assert.NotEmpty(Directory.GetFiles(Path.Combine(directory.Path, "txn"), "*.run"));
+
                 if (reject)
                 {
                     await Assert.ThrowsAsync<PantsInvalidArgumentException>(() => rejected.CommitAsync(PantsWriteOptions.CloudStrict).AsTask());
@@ -47,10 +48,12 @@ public sealed class PantsPublicEntryCapacityTests
                     await rejected.CommitAsync(PantsWriteOptions.CloudStrict);
                 }
             }
+
             if (reject)
             {
                 Assert.Equal(before.WalAppendCount, (await database.Diagnostics.GetRuntimeMetricsAsync()).WalAppendCount);
             }
+
             await PutAsync(database, "later", "accepted"u8.ToArray(), PantsWriteOptions.CloudStrict);
         }
         await using var reopened = await PantsDatabase.OpenForTestingAsync(options, dependencies);
@@ -58,6 +61,7 @@ public sealed class PantsPublicEntryCapacityTests
         Assert.Equal("previous"u8.ToArray(), (await reader.GetAsync("stable"u8.ToArray()))?.ToArray());
         Assert.Equal("accepted"u8.ToArray(), (await reader.GetAsync("later"u8.ToArray()))?.ToArray());
         var actual = await reader.GetAsync("key"u8.ToArray());
+
         if (reject)
         {
             Assert.Null(actual);
@@ -114,6 +118,7 @@ public sealed class PantsPublicEntryCapacityTests
             {
                 transaction.Delete(new byte[64 * 1024 * 1024 - 34]);
             }
+
             await transaction.RollbackAsync();
         }
         await using (var writer = await database.Transactions.BeginAsync(database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadWrite))

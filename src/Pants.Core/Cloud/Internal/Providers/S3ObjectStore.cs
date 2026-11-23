@@ -28,13 +28,16 @@ sealed class S3ObjectStore : CloudObjectStore
         HttpClient httpClient,
         TimeSpan timeout,
         HttpClient? credentialHttpClient = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null
+    )
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+
         if (timeout < TimeSpan.FromMilliseconds(1))
         {
             throw PantsException.InvalidArgument("S3 operation timeout must be at least one millisecond.");
         }
+
 
         (_bucket, _region, _endpoint, _pathStyle, _credentialProvider) = provider switch
         {
@@ -111,7 +114,8 @@ sealed class S3ObjectStore : CloudObjectStore
 
     public override async ValueTask<CloudObject?> GetAsync(
         string objectKey,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var response = await SendReadAsync(
             token => CreateObjectRequestAsync(
@@ -121,10 +125,12 @@ sealed class S3ObjectStore : CloudObjectStore
                 null,
                 token),
             cancellationToken).ConfigureAwait(false);
+
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
         }
+
 
         EnsureSuccess(response);
         var data = await response.Content.ReadAsByteArrayAsync(cancellationToken)
@@ -138,7 +144,8 @@ sealed class S3ObjectStore : CloudObjectStore
         string objectKey,
         ulong offset,
         int length,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         GetRangeCoreAsync(objectKey, offset, length, null, cancellationToken);
 
     internal override ValueTask<CloudObject?> GetRangeAsync(
@@ -146,7 +153,8 @@ sealed class S3ObjectStore : CloudObjectStore
         ulong offset,
         int length,
         CloudObjectMetadata expectedMetadata,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         GetRangeCoreAsync(objectKey, offset, length, expectedMetadata, cancellationToken);
 
     async ValueTask<CloudObject?> GetRangeCoreAsync(
@@ -154,7 +162,8 @@ sealed class S3ObjectStore : CloudObjectStore
         ulong offset,
         int length,
         CloudObjectMetadata? expectedMetadata,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ValidateRange(offset, length);
         using var response = await SendReadAsync(
@@ -169,19 +178,23 @@ sealed class S3ObjectStore : CloudObjectStore
                 request.Headers.Range = new RangeHeaderValue(
                     checked((long)offset),
                     checked((long)offset + length - 1));
+
                 if (expectedMetadata is not null)
                 {
                     request.Headers.IfMatch.Add(new EntityTagHeaderValue(expectedMetadata.Version));
                 }
 
+
                 return request;
             },
             expectedMetadata?.SizeBytes,
             cancellationToken).ConfigureAwait(false);
+
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
         }
+
 
         if (expectedMetadata is not null && response.StatusCode == HttpStatusCode.PreconditionFailed)
         {
@@ -191,10 +204,12 @@ sealed class S3ObjectStore : CloudObjectStore
         EnsureSuccess(response);
         var data = await response.Content.ReadAsByteArrayAsync(cancellationToken)
             .ConfigureAwait(false);
+
         if (data.Length != length)
         {
             throw new PantsIOException("S3 ranged GET returned an unexpected byte count.");
         }
+
 
         var version = response.Headers.ETag?.Tag ??
                       throw new PantsIOException("S3 ranged GET response did not include an ETag.");
@@ -203,7 +218,8 @@ sealed class S3ObjectStore : CloudObjectStore
 
     public override async ValueTask<CloudObjectMetadata?> HeadAsync(
         string objectKey,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var response = await SendReadAsync(
             token => CreateObjectRequestAsync(
@@ -213,10 +229,12 @@ sealed class S3ObjectStore : CloudObjectStore
                 null,
                 token),
             cancellationToken).ConfigureAwait(false);
+
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
         }
+
 
         EnsureSuccess(response);
         var size = response.Content.Headers.ContentLength is { } contentLength && contentLength >= 0
@@ -235,9 +253,11 @@ sealed class S3ObjectStore : CloudObjectStore
         string objectKey,
         ReadOnlyMemory<byte> data,
         CloudObjectWriteCondition condition,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(condition);
+
         for (var attempt = 1; ; attempt++)
         {
             using var response = await SendMutationAsync(
@@ -249,6 +269,7 @@ sealed class S3ObjectStore : CloudObjectStore
                     token),
                 cancellationToken).ConfigureAwait(false);
             var code = await ReadS3ErrorCodeAsync(response, cancellationToken).ConfigureAwait(false);
+
             if (response.StatusCode == HttpStatusCode.PreconditionFailed &&
                 StringComparer.OrdinalIgnoreCase.Equals(code, "PreconditionFailed"))
             {
@@ -258,6 +279,7 @@ sealed class S3ObjectStore : CloudObjectStore
             // A concurrent conditional write makes S3 answer 409 without applying this one, so it
             // is safe to send again. Out of attempts, ConditionalRequestConflict is a lost
             // condition; OperationAborted is a provider failure, not a conflict.
+
             if (response.StatusCode == HttpStatusCode.Conflict &&
                 (StringComparer.OrdinalIgnoreCase.Equals(code, "ConditionalRequestConflict") ||
                  StringComparer.OrdinalIgnoreCase.Equals(code, "OperationAborted")))
@@ -283,7 +305,8 @@ sealed class S3ObjectStore : CloudObjectStore
 
     static async ValueTask<string?> ReadS3ErrorCodeAsync(
         HttpResponseMessage response,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (response.IsSuccessStatusCode)
         {
@@ -298,7 +321,8 @@ sealed class S3ObjectStore : CloudObjectStore
     public override async ValueTask<CloudObjectListPage> ListPageAsync(
         string prefix,
         string? continuationToken,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var fullPrefix = CombinePrefix(prefix);
         using var response = await SendReadAsync(
@@ -325,11 +349,13 @@ sealed class S3ObjectStore : CloudObjectStore
             .FirstOrDefault(static element => element.Name.LocalName == "NextContinuationToken")?
             .Value;
         nextToken = string.IsNullOrEmpty(nextToken) ? null : nextToken;
+
         if (truncated && nextToken is null)
         {
             throw new PantsIOException(
                 "S3 LIST response was truncated without NextContinuationToken.");
         }
+
 
         return new CloudObjectListPage(objectKeys, truncated ? nextToken : null);
     }
@@ -337,16 +363,19 @@ sealed class S3ObjectStore : CloudObjectStore
     public override async ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
         string objectKey,
         CloudObjectDeleteCondition condition,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(condition);
         using var response = await SendMutationAsync(
             token => CreateDeleteRequestAsync(objectKey, condition, token),
             cancellationToken).ConfigureAwait(false);
+
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return CloudObjectDeleteOutcome.NotFound;
         }
+
 
         if (response.StatusCode == HttpStatusCode.PreconditionFailed &&
             condition is PantsCloudObjectDeleteCondition.IfVersion &&
@@ -364,36 +393,42 @@ sealed class S3ObjectStore : CloudObjectStore
 
     ValueTask<HttpResponseMessage> SendReadAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         SendAsync(requestFactory, true, cancellationToken);
 
     ValueTask<HttpResponseMessage> SendReadAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
         ulong? expectedRangeObjectLength,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         SendAsync(requestFactory, true, expectedRangeObjectLength, cancellationToken);
 
     ValueTask<HttpResponseMessage> SendMutationAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         SendAsync(requestFactory, false, cancellationToken);
 
     ValueTask<HttpResponseMessage> SendAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
         bool retryTransientFailures,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         SendAsync(requestFactory, retryTransientFailures, null, cancellationToken);
 
     async ValueTask<HttpResponseMessage> SendAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
         bool retryTransientFailures,
         ulong? expectedRangeObjectLength,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var deadline = new CancellationTokenSource(_timeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             deadline.Token);
+
         for (var attempt = 1; ; attempt++)
         {
             try
@@ -405,6 +440,7 @@ sealed class S3ObjectStore : CloudObjectStore
                     expectedRangeObjectLength,
                     linked.Token,
                     cancellationToken).ConfigureAwait(false);
+
                 if (!retryTransientFailures && IsRetryable(response.StatusCode))
                 {
                     var statusCode = response.StatusCode;
@@ -412,6 +448,7 @@ sealed class S3ObjectStore : CloudObjectStore
                     throw new PantsIOException(
                         $"S3 mutation outcome is indeterminate after HTTP {(int)statusCode}.");
                 }
+
 
                 if (!retryTransientFailures ||
                     !CloudRetryPolicy.IsTransientStatus(response.StatusCode) ||
@@ -469,14 +506,17 @@ sealed class S3ObjectStore : CloudObjectStore
         string objectKey,
         ReadOnlyMemory<byte> data,
         CloudObjectWriteCondition? condition,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var uri = BuildObjectUri(objectKey);
         var request = new HttpRequestMessage(method, uri);
+
         if (method == HttpMethod.Put)
         {
             request.Content = new ReadOnlyMemoryContent(data);
         }
+
 
         switch (condition)
         {
@@ -500,7 +540,8 @@ sealed class S3ObjectStore : CloudObjectStore
     async ValueTask<HttpRequestMessage> CreateBucketRequestAsync(
         HttpMethod method,
         Uri uri,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var request = new HttpRequestMessage(method, uri);
         await SignAsync(
@@ -513,9 +554,11 @@ sealed class S3ObjectStore : CloudObjectStore
     async ValueTask<HttpRequestMessage> CreateDeleteRequestAsync(
         string objectKey,
         CloudObjectDeleteCondition condition,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var request = new HttpRequestMessage(HttpMethod.Delete, BuildObjectUri(objectKey));
+
         switch (condition)
         {
             case PantsCloudObjectDeleteCondition.Unconditional:
@@ -529,6 +572,7 @@ sealed class S3ObjectStore : CloudObjectStore
                     "The cloud object delete condition is invalid.");
         }
 
+
         await SignAsync(
             request,
             ReadOnlyMemory<byte>.Empty,
@@ -539,7 +583,8 @@ sealed class S3ObjectStore : CloudObjectStore
     async ValueTask SignAsync(
         HttpRequestMessage request,
         ReadOnlyMemory<byte> payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var credentials = await _credentialProvider.GetCredentialsAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -551,10 +596,12 @@ sealed class S3ObjectStore : CloudObjectStore
             : Hex(SHA256.HashData(payload.Span));
         request.Headers.TryAddWithoutValidation("x-amz-date", timestamp);
         request.Headers.TryAddWithoutValidation("x-amz-content-sha256", payloadHash);
+
         if (credentials.SessionToken is { } sessionToken)
         {
             request.Headers.TryAddWithoutValidation("x-amz-security-token", sessionToken);
         }
+
 
         var host = request.RequestUri!.IsDefaultPort
             ? request.RequestUri.Host
@@ -565,10 +612,12 @@ sealed class S3ObjectStore : CloudObjectStore
             ["x-amz-content-sha256"] = payloadHash,
             ["x-amz-date"] = timestamp
         };
+
         if (credentials.SessionToken is { } token)
         {
             headers["x-amz-security-token"] = token;
         }
+
 
         var canonicalHeaders = string.Concat(headers.Select(static pair => $"{pair.Key}:{pair.Value.Trim()}\n"));
         var signedHeaders = string.Join(';', headers.Keys);
@@ -636,10 +685,12 @@ sealed class S3ObjectStore : CloudObjectStore
             new("prefix", fullPrefix),
             new("max-keys", CloudObjectStore.MaximumListPageKeys.ToString(CultureInfo.InvariantCulture))
         };
+
         if (continuationToken is not null)
         {
             parameters.Add(new KeyValuePair<string, string>("continuation-token", continuationToken));
         }
+
 
         builder.Query = string.Join(
             '&',
@@ -675,7 +726,8 @@ sealed class S3ObjectStore : CloudObjectStore
     static async ValueTask<bool> HasS3ErrorCodeAsync(
         HttpResponseMessage response,
         string expectedCode,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var body = await response.Content.ReadAsStringAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -705,6 +757,7 @@ sealed class S3ObjectStore : CloudObjectStore
     static void ValidateRange(ulong offset, int length)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(length);
+
         if (offset > long.MaxValue || offset > (ulong)(long.MaxValue - length + 1))
         {
             throw PantsException.InvalidArgument("The cloud object range is too large.");
@@ -754,11 +807,13 @@ sealed class S3ObjectStore : CloudObjectStore
     static string NormalizeListPrefix(string prefix)
     {
         ArgumentNullException.ThrowIfNull(prefix);
+
         if (prefix.StartsWith('/') || prefix.Contains('\\') ||
             prefix.Split('/').Any(static segment => segment is "." or ".."))
         {
             throw new PantsInvalidArgumentException("Cloud object list prefix is unsafe.");
         }
+
 
         return prefix;
     }

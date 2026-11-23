@@ -15,6 +15,7 @@ public sealed class PantsFlushPublicationMetricsTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path),
             new RuntimeDependencies(failpoint, runtimeTimeProvider: timeProvider));
+
         try
         {
             await CommitAsync(database, database.ColumnFamilies.DefaultFamily);
@@ -46,6 +47,7 @@ public sealed class PantsFlushPublicationMetricsTests
         {
             failpoint.Release();
         }
+
 
         await database.ShutdownAsync(TestTimeouts.Expected);
         await using var reopened = await PantsDatabase.OpenAsync(CreateOptions(directory.Path));
@@ -79,7 +81,8 @@ public sealed class PantsFlushPublicationMetricsTests
 
     static async Task<PantsRuntimeMetrics> WaitForMetricsAsync(
         IPantsDatabase database,
-        Func<PantsRuntimeMetrics, bool> condition)
+        Func<PantsRuntimeMetrics, bool> condition
+    )
     {
         PantsRuntimeMetrics? metrics = null;
         await TestWait.UntilAsync(async () =>

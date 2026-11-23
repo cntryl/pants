@@ -31,6 +31,7 @@ static class TransientSharingRetry
     {
         ArgumentNullException.ThrowIfNull(operation);
         ArgumentNullException.ThrowIfNull(delay);
+
         for (var attempt = 1; ; attempt++)
         {
             try

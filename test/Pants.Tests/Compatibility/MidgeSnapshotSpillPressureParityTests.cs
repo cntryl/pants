@@ -42,18 +42,21 @@ public sealed class MidgeSnapshotSpillPressureParityTests
                 family,
                 PantsTransactionMode.ReadOnly);
             var oldDisposed = false;
+
             try
             {
                 await AssertExactAsync(old, initial);
 
                 clock.UtcNow = clock.UtcNow.AddSeconds(2);
                 var expiredExpected = new SortedDictionary<string, byte[]>(StringComparer.Ordinal);
+
                 foreach (var row in initial.Where(static pair => StringComparer.Ordinal.Compare(
                              pair.Key,
                              "row-008") >= 0))
                 {
                     expiredExpected.Add(row.Key, row.Value);
                 }
+
 
                 await using (var expired = await database.Transactions.BeginAsync(
                                  family,
@@ -63,6 +66,7 @@ public sealed class MidgeSnapshotSpillPressureParityTests
                 }
 
                 expected = new SortedDictionary<string, byte[]>(StringComparer.Ordinal);
+
                 for (var round = 0; round < 16; round++)
                 {
                     var candidate = new SortedDictionary<string, byte[]>(StringComparer.Ordinal);
@@ -71,6 +75,7 @@ public sealed class MidgeSnapshotSpillPressureParityTests
                                      PantsTransactionMode.ReadWrite))
                     {
                         rewrite.DeleteRange(KeyBytes("row-008"), KeyBytes("row-024"));
+
                         for (var index = 0; index < RowCount; index++)
                         {
                             if (index is >= 8 and < 24)
@@ -84,6 +89,7 @@ public sealed class MidgeSnapshotSpillPressureParityTests
                             candidate.Add(key, value);
                         }
 
+
                         await rewrite.CommitAsync(PantsWriteOptions.CloudStrict);
                     }
 
@@ -96,6 +102,7 @@ public sealed class MidgeSnapshotSpillPressureParityTests
                         PantsTransactionMode.ReadOnly);
                     await AssertExactAsync(current, expected);
                 }
+
 
                 await using (var hog = await ExhaustSpillCapacityAsync(database, family, directory.Path))
                 {
@@ -171,9 +178,11 @@ public sealed class MidgeSnapshotSpillPressureParityTests
 
     static async Task<SortedDictionary<string, byte[]>> SeedRowsAsync(
         IPantsDatabase database,
-        IPantsColumnFamily family)
+        IPantsColumnFamily family
+    )
     {
         var initial = new SortedDictionary<string, byte[]>(StringComparer.Ordinal);
+
         for (var index = 0; index < RowCount; index++)
         {
             var key = RowKey(index);
@@ -189,6 +198,7 @@ public sealed class MidgeSnapshotSpillPressureParityTests
             initial.Add(key, value);
         }
 
+
         await database.Maintenance.FlushAsync(family);
         return initial;
     }
@@ -196,7 +206,8 @@ public sealed class MidgeSnapshotSpillPressureParityTests
     static async Task<IPantsTransaction> ExhaustSpillCapacityAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,
-        string root)
+        string root
+    )
     {
         var beforeHog = Assert.IsType<PantsHybridStorageBudgetSnapshot>(
             (await database.Diagnostics.GetRuntimeMetricsAsync()).HybridStorageBudget);
@@ -204,9 +215,11 @@ public sealed class MidgeSnapshotSpillPressureParityTests
         Assert.True(availableBytes > 0, "The setup must leave local capacity for caller-owned spills.");
         var minimumSpillBytes = checked(availableBytes * 3 / 4);
         var hog = await database.Transactions.BeginAsync(family, PantsTransactionMode.ReadWrite);
+
         try
         {
             var spillBoundaryReached = false;
+
             for (var index = 0; index < UncommittedCount; index++)
             {
                 try
@@ -221,6 +234,7 @@ public sealed class MidgeSnapshotSpillPressureParityTests
                     break;
                 }
             }
+
 
             Assert.True(spillBoundaryReached, "The transaction must exhaust actual spill capacity.");
             var transactionDirectory = Path.Combine(root, "txn");
@@ -254,12 +268,14 @@ public sealed class MidgeSnapshotSpillPressureParityTests
 
     static async Task AssertRejectsWriteUnderPressureAsync(
         IPantsDatabase database,
-        IPantsColumnFamily family)
+        IPantsColumnFamily family
+    )
     {
         await using var blocked = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadWrite);
         PantsException? pressureError = null;
+
         try
         {
             var value = new byte[64 * 1024];
@@ -272,6 +288,7 @@ public sealed class MidgeSnapshotSpillPressureParityTests
             pressureError = exception;
         }
 
+
         Assert.NotNull(pressureError);
         Assert.True(
             pressureError.Code is PantsErrorCode.NoSpace or PantsErrorCode.WriteStall or PantsErrorCode.Busy,
@@ -280,7 +297,8 @@ public sealed class MidgeSnapshotSpillPressureParityTests
 
     static async Task AssertExactAsync(
         IPantsTransaction transaction,
-        SortedDictionary<string, byte[]> expected)
+        SortedDictionary<string, byte[]> expected
+    )
     {
         var rows = new List<(string Key, byte[] Value)>();
         await using (var scan = await transaction.ScanAsync(new PantsScanQuery()))
@@ -295,15 +313,18 @@ public sealed class MidgeSnapshotSpillPressureParityTests
         Assert.Equal(actualKeys.Order(StringComparer.Ordinal).ToArray(), actualKeys);
         Assert.Equal(actualKeys.Length, actualKeys.Distinct(StringComparer.Ordinal).Count());
         Assert.Equal(expected.Keys.ToArray(), actualKeys);
+
         foreach (var (key, value) in rows)
         {
             Assert.Equal(expected[key], value);
         }
 
+
         for (var index = 0; index < RowCount; index++)
         {
             var key = RowKey(index);
             var result = await transaction.GetAsync(KeyBytes(key));
+
             if (expected.TryGetValue(key, out var value))
             {
                 Assert.Equal(value, Assert.IsType<ReadOnlyMemory<byte>>(result).ToArray());
@@ -320,6 +341,7 @@ public sealed class MidgeSnapshotSpillPressureParityTests
         }
 
         var released = await transaction.GetAsync(KeyBytes("released"));
+
         if (expected.TryGetValue("released", out var releasedValue))
         {
             Assert.Equal(releasedValue, Assert.IsType<ReadOnlyMemory<byte>>(released).ToArray());
@@ -341,6 +363,7 @@ public sealed class MidgeSnapshotSpillPressureParityTests
     static async Task WaitForCloudSstReclamationAsync(IReadOnlyList<string> paths)
     {
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+
         while (paths.Any(File.Exists))
         {
             Assert.True(
@@ -353,6 +376,7 @@ public sealed class MidgeSnapshotSpillPressureParityTests
     static byte[] Payload(uint seed, int length)
     {
         var value = new byte[length];
+
         for (var index = 0; index < value.Length; index++)
         {
             seed ^= seed << 13;
@@ -360,6 +384,7 @@ public sealed class MidgeSnapshotSpillPressureParityTests
             seed ^= seed << 5;
             value[index] = (byte)seed;
         }
+
 
         return value;
     }

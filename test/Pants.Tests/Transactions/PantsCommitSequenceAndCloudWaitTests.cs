@@ -12,6 +12,7 @@ public sealed class PantsCommitSequenceAndCloudWaitTests
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
             var transactions = new List<IPantsTransaction>();
+
             try
             {
                 for (var index = 0; index < 32; index++)
@@ -20,6 +21,7 @@ public sealed class PantsCommitSequenceAndCloudWaitTests
                     transaction.Put(TestBytes.FromString($"key-{index}"), TestBytes.FromString($"value-{index}"));
                     transactions.Add(transaction);
                 }
+
                 var sequences = await Task.WhenAll(transactions.Select(transaction => transaction.CommitWithSequenceAsync(PantsWriteOptions.Sync).AsTask()));
                 Assert.All(sequences, static sequence => Assert.True(sequence > 0));
                 Assert.Equal(sequences.Length, sequences.Distinct().Count());
@@ -35,6 +37,7 @@ public sealed class PantsCommitSequenceAndCloudWaitTests
         }
         await using var reopened = await PantsDatabase.OpenAsync(options);
         await using var reader = await reopened.Transactions.BeginAsync(reopened.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 32; index++)
         {
             Assert.Equal(TestBytes.FromString($"value-{index}"), (await reader.GetAsync(TestBytes.FromString($"key-{index}")))?.ToArray());

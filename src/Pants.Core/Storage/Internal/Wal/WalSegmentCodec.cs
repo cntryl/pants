@@ -48,10 +48,12 @@ static class WalSegmentCodec
             new WalChainLink(BinaryPrimitives.ReadUInt64LittleEndian(bytes[52..]),
                 BinaryPrimitives.ReadUInt64LittleEndian(bytes[60..]), bytes.Slice(68, 16).ToArray()));
         var holder = new Guid(bytes.Slice(28, 16), bigEndian: true);
+
         if (open.Id <= open.Prev.Id || open.FirstSeq <= open.Prev.LastSeq)
         {
             throw new PantsCorruptionException("WAL segment header chain is invalid.");
         }
+
 
         return (open, holder);
     }
@@ -69,23 +71,28 @@ static class WalSegmentCodec
     public static byte[] Digest(Stream stream, long offset, long length, CancellationToken cancellationToken = default)
     {
         var position = stream.Position;
+
         try
         {
             stream.Position = offset;
             var hash = new XxHash128();
             var buffer = new byte[64 * 1024];
+
             while (length > 0)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var requested = (int)Math.Min(buffer.Length, length);
+
                 if (!DiskFormat.ReadExactly(stream, buffer.AsSpan(0, requested)))
                 {
                     throw new PantsCorruptionException("WAL segment changed while computing its digest.");
                 }
 
+
                 hash.Append(buffer.AsSpan(0, requested));
                 length -= requested;
             }
+
 
             var digest = new byte[16];
             BinaryPrimitives.WriteUInt128LittleEndian(digest, hash.GetCurrentHashAsUInt128());
@@ -102,19 +109,23 @@ static class WalSegmentCodec
         stream.Flush();
         stream.Position = 0;
         var header = new byte[HeaderSize];
+
         if (!DiskFormat.ReadExactly(stream, header))
         {
             throw new PantsCorruptionException("WAL segment header is truncated.");
         }
 
+
         var (open, _) = DecodeHeader(header);
         stream.Position = 0;
         var scan = WalFrameReader.ScanSegment(stream);
+
         if (scan.Footer is { } existing)
         {
             stream.Flush(true);
             return existing;
         }
+
 
         var summary = scan.Summary;
         var length = stream.Length;
@@ -130,11 +141,13 @@ static class WalSegmentCodec
         DiskFormat.WriteUInt64(payload, summary.LastSequence);
         DiskFormat.WriteUInt64(payload, checked((ulong)length));
         DiskFormat.WriteUInt32(payload, checked((uint)summary.MaximumSequenceByFamily.Count));
+
         foreach (var pair in summary.MaximumSequenceByFamily)
         {
             DiskFormat.WriteUInt32(payload, pair.Key);
             DiskFormat.WriteUInt64(payload, pair.Value);
         }
+
 
         payload.Write(facts.Link.Digest);
         WalCodec.AppendFrame(stream.SafeFileHandle, length, payload.ToArray());
@@ -143,20 +156,31 @@ static class WalSegmentCodec
         return facts;
     }
 
-    public static WalSealedFacts ValidateFooter(ReadOnlySpan<byte> payload, ReadOnlySpan<byte> preceding,
-        WalOpenFacts open, IReadOnlyList<WalRecord> records)
+    public static WalSealedFacts ValidateFooter(
+        ReadOnlySpan<byte> payload,
+        ReadOnlySpan<byte> preceding,
+        WalOpenFacts open,
+        IReadOnlyList<WalRecord> records
+    )
     {
         var summary = new WalSegmentSummary(open);
+
         foreach (var record in records)
         {
             summary.Observe(record);
         }
 
+
         return ValidateFooter(payload, Digest(preceding), checked((ulong)preceding.Length), open, summary);
     }
 
-    public static WalSealedFacts ValidateFooter(ReadOnlySpan<byte> payload, ReadOnlySpan<byte> digest,
-        ulong dataLength, WalOpenFacts open, WalSegmentSummary summary)
+    public static WalSealedFacts ValidateFooter(
+        ReadOnlySpan<byte> payload,
+        ReadOnlySpan<byte> digest,
+        ulong dataLength,
+        WalOpenFacts open,
+        WalSegmentSummary summary
+    )
     {
         if (payload.Length < 63 || !IsFooter(payload) || payload[2] != 1)
         {
@@ -168,6 +192,7 @@ static class WalSegmentCodec
         var last = BinaryPrimitives.ReadUInt64LittleEndian(payload[27..]);
         var length = BinaryPrimitives.ReadUInt64LittleEndian(payload[35..]);
         var familyCount = BinaryPrimitives.ReadUInt32LittleEndian(payload[43..]);
+
         if (familyCount > (payload.Length - 63) / 12 || payload.Length != 63L + familyCount * 12L ||
             BinaryPrimitives.ReadUInt64LittleEndian(payload[3..]) != open.Id ||
             count != summary.RecordCount || length != dataLength ||
@@ -177,12 +202,15 @@ static class WalSegmentCodec
             throw new PantsCorruptionException("WAL segment footer disagrees with its records or digest.");
         }
 
+
         var expected = summary.MaximumSequenceByFamily
             .Select(static pair => new[] { (ulong)pair.Key, pair.Value }).ToArray();
+
         if (expected.Length != familyCount)
         {
             throw new PantsCorruptionException("WAL footer family coverage is invalid.");
         }
+
 
         for (var index = 0; index < expected.Length; index++)
         {

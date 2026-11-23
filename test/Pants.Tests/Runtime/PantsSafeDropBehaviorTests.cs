@@ -11,7 +11,8 @@ public sealed class PantsSafeDropBehaviorTests
     [InlineData(true, true)]
     public async Task ShouldRefuseDropWithoutWaitingForAnOwnedImmutableFlush(
         bool discardUnflushed,
-        bool hasActiveData)
+        bool hasActiveData
+    )
     {
         using var directory = new TemporaryDirectory();
         using var held = new HeldFlush();
@@ -27,10 +28,12 @@ public sealed class PantsSafeDropBehaviorTests
             frozenValue[0] = 7;
             await WriteAsync(database, family, "frozen", frozenValue);
             await held.Blocked.WaitAsync(TestTimeouts.Expected);
+
             if (hasActiveData)
             {
                 await WriteAsync(database, family, "active", [9]);
             }
+
 
             var before = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(1, before.ImmutableMemtables);
@@ -38,9 +41,11 @@ public sealed class PantsSafeDropBehaviorTests
             var drop = discardUnflushed
                 ? database.ColumnFamilies.DropDiscardingUnflushedAsync(family).AsTask()
                 : database.ColumnFamilies.DropAsync(family).AsTask();
+
             try
             {
                 var error = await Record.ExceptionAsync(() => drop.WaitAsync(TimeSpan.FromSeconds(2)));
+
                 if (!discardUnflushed && hasActiveData)
                 {
                     var unflushed = Assert.IsType<PantsUnflushedDataPresentException>(error);
@@ -52,6 +57,7 @@ public sealed class PantsSafeDropBehaviorTests
                 {
                     Assert.False(Assert.IsType<PantsBusyException>(error).LicensesUnflushedDiscard);
                 }
+
 
                 Assert.False(held.IsReleased);
                 var after = await database.Diagnostics.GetRuntimeMetricsAsync();
@@ -67,6 +73,7 @@ public sealed class PantsSafeDropBehaviorTests
             finally
             {
                 held.Release();
+
                 try
                 {
                     await drop.WaitAsync(TestTimeouts.Expected);
@@ -75,6 +82,7 @@ public sealed class PantsSafeDropBehaviorTests
                 {
                 }
             }
+
 
             await database.Maintenance.FlushAsync(family);
             await database.ColumnFamilies.DropAsync(family);
@@ -161,6 +169,7 @@ public sealed class PantsSafeDropBehaviorTests
             }
 
             _blocked.TrySetResult();
+
             if (!_release.Wait(TestTimeouts.Expected))
             {
                 throw new TimeoutException("The owned flush was not released.");

@@ -55,6 +55,7 @@ public sealed class PantsControlEnqueueDeadlineTests
         using var failpoint = new RuntimeMetricsResponseFailpointHandler();
         var time = new ManualSchedulingTimeProvider();
         var database = await OpenSaturableAsync(directory.Path, failpoint, time);
+
         try
         {
             var saturation = await SaturateRuntimeQueueAsync(database, failpoint);
@@ -88,6 +89,7 @@ public sealed class PantsControlEnqueueDeadlineTests
             await database.DisposeAsync();
         }
 
+
         await using var reopened = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
         Assert.Null(await reopened.ColumnFamilies.GetAsync("never-admitted"));
         Assert.DoesNotContain(
@@ -102,6 +104,7 @@ public sealed class PantsControlEnqueueDeadlineTests
         using var failpoint = new RuntimeMetricsResponseFailpointHandler();
         var time = new ManualSchedulingTimeProvider();
         var database = await OpenSaturableAsync(directory.Path, failpoint, time);
+
         try
         {
             var saturation = await SaturateRuntimeQueueAsync(database, failpoint);
@@ -135,7 +138,8 @@ public sealed class PantsControlEnqueueDeadlineTests
     static async Task<IPantsDatabase> OpenSaturableAsync(
         string path,
         RuntimeMetricsResponseFailpointHandler failpoint,
-        ManualSchedulingTimeProvider time) =>
+        ManualSchedulingTimeProvider time
+    ) =>
         await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(path)
                 .WithBackgroundCompaction(false)
@@ -150,7 +154,8 @@ public sealed class PantsControlEnqueueDeadlineTests
     /// </summary>
     static async Task<Task> SaturateRuntimeQueueAsync(
         IPantsDatabase database,
-        RuntimeMetricsResponseFailpointHandler failpoint)
+        RuntimeMetricsResponseFailpointHandler failpoint
+    )
     {
         // Startup queues its own commands before reading the mailbox; cross that barrier first.
         _ = await database.Diagnostics.GetStorageLayoutAsync().AsTask().WaitAsync(TestTimeouts.Expected);
@@ -164,6 +169,7 @@ public sealed class PantsControlEnqueueDeadlineTests
     static async Task SendAsync(IPantsDatabase database, ControlRequest kind)
     {
         var family = database.ColumnFamilies.DefaultFamily;
+
         switch (kind)
         {
             case ControlRequest.BeginTransaction:
@@ -196,6 +202,7 @@ public sealed class PantsControlEnqueueDeadlineTests
         for (var attempt = 0; attempt < 40 && !request.IsCompleted; attempt++)
         {
             time.Advance(ResponseTimeout);
+
             try
             {
                 await request.WaitAsync(TimeSpan.FromMilliseconds(100));

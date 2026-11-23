@@ -24,7 +24,8 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
         string region,
         HttpClient httpClient,
         TimeSpan timeout,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider
+    )
     {
         _region = region;
         _httpClient = httpClient;
@@ -44,12 +45,15 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
         CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
         if (_cached is { } cached && !cached.RequiresRefresh(_timeProvider.GetUtcNow()))
         {
             return cached.Credentials;
         }
 
+
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
         try
         {
             if (_cached is { } current && !current.RequiresRefresh(_timeProvider.GetUtcNow()))
@@ -107,6 +111,7 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
         var roleArn = RequireEnvironment("AWS_ROLE_ARN");
         var tokenPath = RequireEnvironment("AWS_WEB_IDENTITY_TOKEN_FILE");
         string token;
+
         try
         {
             token = (await File.ReadAllTextAsync(tokenPath, cancellationToken)
@@ -121,16 +126,19 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
             throw new PantsIOException("AWS web-identity token file could not be read.", exception);
         }
 
+
         if (token.Length == 0)
         {
             throw new PantsInvalidArgumentException("AWS web-identity token file is empty.");
         }
 
         var sessionName = Environment.GetEnvironmentVariable("AWS_ROLE_SESSION_NAME");
+
         if (string.IsNullOrWhiteSpace(sessionName))
         {
             sessionName = $"pants-{_timeProvider.GetUtcNow().ToUnixTimeSeconds()}";
         }
+
 
         var dnsSuffix = _region.StartsWith("cn-", StringComparison.Ordinal)
             ? "amazonaws.com.cn"
@@ -163,9 +171,11 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
         using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
         var tokenFile = Environment.GetEnvironmentVariable(
             "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE");
+
         if (!string.IsNullOrWhiteSpace(tokenFile))
         {
             string token;
+
             try
             {
                 token = (await File.ReadAllTextAsync(tokenFile, cancellationToken)
@@ -184,6 +194,7 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
                     exception);
             }
 
+
             if (token.Length > 0)
             {
                 request.Headers.TryAddWithoutValidation("Authorization", token);
@@ -194,6 +205,7 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
         {
             request.Headers.TryAddWithoutValidation("Authorization", authorization);
         }
+
 
         using var response = await SendCredentialRequestAsync(request, cancellationToken)
             .ConfigureAwait(false);
@@ -217,10 +229,12 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
         EnsureSuccess(tokenResponse, "AWS IMDSv2 token request");
         var token = (await tokenResponse.Content.ReadAsStringAsync(cancellationToken)
             .ConfigureAwait(false)).Trim();
+
         if (token.Length == 0)
         {
             throw new PantsIOException("AWS IMDSv2 token response was empty.");
         }
+
 
         using var roleRequest = CreateImdsRequest(
             new Uri(endpoint, "/latest/meta-data/iam/security-credentials/"),
@@ -231,10 +245,12 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
         EnsureSuccess(roleResponse, "AWS IMDS role-name request");
         var role = (await roleResponse.Content.ReadAsStringAsync(cancellationToken)
             .ConfigureAwait(false)).Split('\n')[0].Trim();
+
         if (role.Length == 0)
         {
             throw new PantsIOException("AWS IMDS returned an empty IAM role name.");
         }
+
 
         using var credentialRequest = CreateImdsRequest(
             new Uri(
@@ -251,15 +267,18 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
 
     async ValueTask<HttpResponseMessage> SendCredentialRequestAsync(
         HttpRequestMessage request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var deadline = new CancellationTokenSource(_timeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             deadline.Token);
+
         try
         {
             var endpoint = request.RequestUri;
+
             if (endpoint is not null &&
                 endpoint.Scheme == Uri.UriSchemeHttp &&
                 endpoint.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
@@ -269,6 +288,7 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
                     endpoint,
                     linked.Token).ConfigureAwait(false);
             }
+
 
             return await _httpClient.SendAsync(
                     request,
@@ -295,17 +315,21 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
     async ValueTask<HttpResponseMessage> SendPinnedLocalhostRequestAsync(
         HttpRequestMessage request,
         Uri endpoint,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var addresses = await Dns.GetHostAddressesAsync("localhost", cancellationToken)
             .ConfigureAwait(false);
+
         if (addresses.Length == 0 || addresses.Any(static address => !IPAddress.IsLoopback(address)))
         {
             throw new PantsInvalidArgumentException(
                 "AWS localhost credential endpoints must resolve only to loopback addresses.");
         }
 
+
         HttpRequestException? lastFailure = null;
+
         foreach (var address in addresses.Distinct())
         {
             var pinnedHost = address.AddressFamily == AddressFamily.InterNetworkV6
@@ -317,12 +341,15 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
                 Version = request.Version,
                 VersionPolicy = request.VersionPolicy
             };
+
             foreach (var header in request.Headers)
             {
                 pinnedRequest.Headers.TryAddWithoutValidation(header.Key, header.Value);
             }
 
+
             pinnedRequest.Headers.Host = endpoint.Authority;
+
             try
             {
                 return await _httpClient.SendAsync(
@@ -336,6 +363,7 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
                 lastFailure = exception;
             }
         }
+
 
         throw lastFailure ?? new HttpRequestException(
             "No validated localhost credential endpoint address was reachable.");
@@ -363,6 +391,7 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
     {
         var relative = Environment.GetEnvironmentVariable(
             "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI");
+
         if (relative is not null)
         {
             if (!relative.StartsWith('/') ||
@@ -376,7 +405,9 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
             return new Uri("http://169.254.170.2" + relative, UriKind.Absolute);
         }
 
+
         var full = RequireEnvironment("AWS_CONTAINER_CREDENTIALS_FULL_URI");
+
         if (!Uri.TryCreate(full, UriKind.Absolute, out var endpoint) ||
             endpoint.UserInfo.Length > 0 ||
             endpoint.Fragment.Length > 0 ||
@@ -385,6 +416,7 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
             throw new PantsInvalidArgumentException(
                 "AWS_CONTAINER_CREDENTIALS_FULL_URI must be an absolute HTTP(S) URL without credentials or a fragment.");
         }
+
 
         if (endpoint.Scheme == Uri.UriSchemeHttp && !IsAllowedHttpCredentialHost(endpoint.Host))
         {
@@ -399,6 +431,7 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
     {
         var explicitEndpoint = Environment.GetEnvironmentVariable(
             "AWS_EC2_METADATA_SERVICE_ENDPOINT");
+
         if (!string.IsNullOrWhiteSpace(explicitEndpoint))
         {
             if (!Uri.TryCreate(explicitEndpoint.TrimEnd('/'), UriKind.Absolute, out var parsed) ||
@@ -411,6 +444,7 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
 
             return parsed;
         }
+
 
         var mode = Environment.GetEnvironmentVariable(
             "AWS_EC2_METADATA_SERVICE_ENDPOINT_MODE");
@@ -433,9 +467,11 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
 
     async ValueTask<CachedS3Credentials> ParseTemporaryJsonAsync(
         HttpResponseMessage response,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         JsonDocument document;
+
         try
         {
             document = JsonDocument.Parse(
@@ -447,14 +483,17 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
             throw new PantsIOException("AWS temporary credential JSON is malformed.", exception);
         }
 
+
         using (document)
         {
             var root = document.RootElement;
+
             if (root.ValueKind != JsonValueKind.Object)
             {
                 throw new PantsIOException(
                     "AWS temporary credential response must be a JSON object.");
             }
+
 
             var accessKey = RequiredJsonString(root, "AccessKeyId");
             var secretKey = RequiredJsonString(root, "SecretAccessKey");

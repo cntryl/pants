@@ -28,7 +28,8 @@ sealed class SstBlockIterator : IDisposable
         PantsScanDirection direction,
         byte[]? startInclusive,
         byte[]? endExclusive,
-        ResourceBudget? resourceBudget)
+        ResourceBudget? resourceBudget
+    )
     {
         _reader = reader;
         _direction = direction;
@@ -50,13 +51,16 @@ sealed class SstBlockIterator : IDisposable
         PantsScanDirection direction,
         byte[]? startInclusive = null,
         byte[]? endExclusive = null,
-        ResourceBudget? resourceBudget = null)
+        ResourceBudget? resourceBudget = null
+    )
     {
         ArgumentNullException.ThrowIfNull(reader);
+
         if (!Enum.IsDefined(direction))
         {
             throw new ArgumentOutOfRangeException(nameof(direction));
         }
+
 
         return new SstBlockIterator(
             reader,
@@ -76,10 +80,12 @@ sealed class SstBlockIterator : IDisposable
         if (!_started)
         {
             _started = true;
+
             if (_reader.DataBlockCount == 0 || !TryResolveStartBlock(out _blockIndex))
             {
                 return Finish();
             }
+
 
             LoadBlock(_blockIndex);
         }
@@ -94,11 +100,13 @@ sealed class SstBlockIterator : IDisposable
             while (_blockEntries is not null && _positionInBlock < _blockEntries.Count)
             {
                 var candidate = _blockEntries[_positionInBlock++];
+
                 if (_startInclusive is not null &&
                     candidate.Key.AsSpan().SequenceCompareTo(_startInclusive) < 0)
                 {
                     continue;
                 }
+
 
                 if (_endExclusive is not null &&
                     candidate.Key.AsSpan().SequenceCompareTo(_endExclusive) >= 0)
@@ -111,10 +119,12 @@ sealed class SstBlockIterator : IDisposable
             }
 
             _blockIndex++;
+
             if (_blockIndex >= _reader.DataBlockCount)
             {
                 return Finish();
             }
+
 
             LoadBlock(_blockIndex);
         }
@@ -127,11 +137,13 @@ sealed class SstBlockIterator : IDisposable
             while (_blockEntries is not null && _positionInBlock >= 0)
             {
                 var candidate = _blockEntries[_positionInBlock--];
+
                 if (_endExclusive is not null &&
                     candidate.Key.AsSpan().SequenceCompareTo(_endExclusive) >= 0)
                 {
                     continue;
                 }
+
 
                 if (_startInclusive is not null &&
                     candidate.Key.AsSpan().SequenceCompareTo(_startInclusive) < 0)
@@ -144,10 +156,12 @@ sealed class SstBlockIterator : IDisposable
             }
 
             _blockIndex--;
+
             if (_blockIndex < 0)
             {
                 return Finish();
             }
+
 
             LoadBlock(_blockIndex);
         }
@@ -165,13 +179,16 @@ sealed class SstBlockIterator : IDisposable
         using var ownedBlock = _reader.ReadDataBlockOwned(blockIndex, _resourceBudget);
         var block = ownedBlock.Content;
         IDisposable? decodedReservation = _resourceBudget?.Reserve(SstCodec.MeasureDecodedDataBlockBytes(block));
+
         try
         {
             var entries = SstCodec.DecodeDataBlock(block);
+
             if (entries.Count == 0 || !entries[0].Key.AsSpan().SequenceEqual(_reader.GetFirstKey(blockIndex)))
             {
                 throw new PantsCorruptionException("SST index first key does not match its data block.");
             }
+
 
             if (_boundaryEntry is not null)
             {
@@ -215,11 +232,13 @@ sealed class SstBlockIterator : IDisposable
         if (_direction == PantsScanDirection.Forward)
         {
             blockIndex = _startInclusive is null ? 0 : Math.Max(0, FindFloorBlock(_startInclusive));
+
             while (blockIndex > 0 &&
                    _reader.GetFirstKey(blockIndex).AsSpan().SequenceEqual(_startInclusive))
             {
                 blockIndex--;
             }
+
 
             return true;
         }
@@ -240,9 +259,11 @@ sealed class SstBlockIterator : IDisposable
         var low = 0;
         var high = _reader.DataBlockCount - 1;
         var result = -1;
+
         while (low <= high)
         {
             var middle = low + (high - low) / 2;
+
             if (key.AsSpan().SequenceCompareTo(_reader.GetFirstKey(middle)) < 0)
             {
                 high = middle - 1;
@@ -253,6 +274,7 @@ sealed class SstBlockIterator : IDisposable
                 low = middle + 1;
             }
         }
+
 
         return result;
     }

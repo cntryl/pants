@@ -40,10 +40,12 @@ sealed class WalIoState
     public bool FenceIfTransitioning(Exception failure)
     {
         ArgumentNullException.ThrowIfNull(failure);
+
         if (!_transitioning)
         {
             return IsFenced;
         }
+
 
         _transitioning = false;
         Fence(failure);

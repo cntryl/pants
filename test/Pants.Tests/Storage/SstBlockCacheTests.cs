@@ -33,6 +33,7 @@ public sealed class SstBlockCacheTests
             TaskCreationOptions.LongRunning,
             TaskScheduler.Default);
         Assert.True(policies[0].AccessEntered.Wait(TestTimeouts.Expected));
+
         try
         {
             var independentRead = Task.Factory.StartNew(
@@ -47,6 +48,7 @@ public sealed class SstBlockCacheTests
         {
             policies[0].ReleaseAccess.Set();
         }
+
 
         Assert.True(await blockedRead);
     }
@@ -91,10 +93,12 @@ public sealed class SstBlockCacheTests
         var policy = new TinyLfuSstBlockCachePolicy();
         SstBlockCacheKey oldest = new(Sst("oldest"), 0);
         policy.RecordAccess(oldest);
+
         for (var index = 0; index < TinyLfuSstBlockCachePolicy.WindowSize; index++)
         {
             policy.RecordAccess(new SstBlockCacheKey(Sst("recent"), index));
         }
+
 
         Assert.True(policy.TrySelectVictim(out var victim));
         Assert.Equal(oldest, victim);
@@ -104,10 +108,12 @@ public sealed class SstBlockCacheTests
     public void ShouldKeepAdmittingTinyLfuBlocksAfterMoreThanOneSampleWindow()
     {
         var cache = new SstBlockCache(PantsBlockCachePolicy.TinyLfu, 128, 1);
+
         for (var index = 0; index < 128; index++)
         {
             Assert.True(cache.Add(new SstBlockCacheKey(Sst("resident"), index), [1]));
         }
+
 
         for (var hotIndex = 0; hotIndex < 10; hotIndex++)
         {
@@ -127,12 +133,14 @@ public sealed class SstBlockCacheTests
     public void ShouldKeepClockProEvictionMovingWhenMostResidentsWereReused()
     {
         var cache = new SstBlockCache(PantsBlockCachePolicy.ClockPro, 16, 1);
+
         for (var index = 0; index < 16; index++)
         {
             var key = new SstBlockCacheKey(Sst("resident"), index);
             Assert.True(cache.Add(key, [1]));
             Assert.True(cache.TryGet(key, out _));
         }
+
 
         for (var index = 0; index < 64; index++)
         {
@@ -155,11 +163,13 @@ public sealed class SstBlockCacheTests
         Assert.True(cache.Add(hot[1], [1]));
         Assert.True(cache.Add(new SstBlockCacheKey(Sst("cold"), 0), [1]));
         Assert.True(cache.Add(new SstBlockCacheKey(Sst("cold"), 1), [1]));
+
         for (var access = 0; access < 50; access++)
         {
             Assert.True(cache.TryGet(hot[0], out _));
             Assert.True(cache.TryGet(hot[1], out _));
         }
+
 
         for (var scanBlock = 0;
              scanBlock < TinyLfuSstBlockCachePolicy.WindowSize * 5;
@@ -186,15 +196,18 @@ public sealed class SstBlockCacheTests
         var workers = Enumerable.Range(0, workerCount).Select(worker => Task.Run(async () =>
         {
             await start.Task;
+
             for (var operation = 0; operation < operationsPerWorker; operation++)
             {
                 var fileName = $"worker-{worker}-batch-{operation / 10}";
                 var key = new SstBlockCacheKey(Sst(fileName), operation);
                 _ = cache.Add(key, new byte[entrySize]);
+
                 if (operation % 3 == 0)
                 {
                     _ = cache.TryGet(key, out _);
                 }
+
 
                 if (operation % 20 == 9)
                 {
@@ -255,6 +268,7 @@ public sealed class SstBlockCacheTests
         var worker = Task.Run(async () =>
         {
             var successes = 0;
+
             for (var index = 0; index < entryCount; index++)
             {
                 if (cacheClone.Add(new SstBlockCacheKey(Sst($"shared-{index}"), 0), expected))
@@ -269,6 +283,7 @@ public sealed class SstBlockCacheTests
                 }
             }
 
+
             return successes;
         });
 
@@ -278,6 +293,7 @@ public sealed class SstBlockCacheTests
 
         Assert.Equal(entryCount, await worker.WaitAsync(TestTimeouts.Expected));
         Assert.Equal(entryCount, cacheCheck.Count);
+
         for (var index = 0; index < entryCount; index++)
         {
             Assert.True(cacheCheck.TryGet(
@@ -365,14 +381,17 @@ public sealed class SstBlockCacheTests
         Assert.True(cache.Add(hot[1], [1]));
         Assert.True(cache.Add(new SstBlockCacheKey(Sst("cold"), 0), [2]));
         Assert.True(cache.Add(new SstBlockCacheKey(Sst("cold"), 1), [3]));
+
         for (var access = 0; access < 50; access++)
         {
             Assert.True(cache.TryGet(hot[0], out _));
+
             if (access % 3 == 0)
             {
                 Assert.True(cache.TryGet(hot[1], out _));
             }
         }
+
 
         for (var scanBlock = 0; scanBlock < 8; scanBlock++)
         {
@@ -387,6 +406,7 @@ public sealed class SstBlockCacheTests
         for (var index = 0; index < 10_000; index++)
         {
             var key = new SstBlockCacheKey(Sst($"sst-{index}"), index);
+
             if (cache.GetShardIndex(key) == shard)
             {
                 return key;

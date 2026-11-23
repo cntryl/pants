@@ -29,15 +29,18 @@ static class BuiltInCloudProviderValidator
 
     internal static PantsCloudValidationReport Validate(
         PantsCloudStorageLocation location,
-        ImmutableArray<PantsCloudStorageRole> roles) =>
+        ImmutableArray<PantsCloudStorageRole> roles
+    ) =>
         ValidateProviderAndPrefix(location.Provider, location.Prefix, roles);
 
     static PantsCloudValidationReport ValidateProviderAndPrefix(
         IPantsCloudProvider? provider,
         string? prefix,
-        ImmutableArray<PantsCloudStorageRole> roles)
+        ImmutableArray<PantsCloudStorageRole> roles
+    )
     {
         var findings = new List<PantsCloudValidationFinding>();
+
         if (provider is null)
         {
             findings.Add(Failure(
@@ -46,6 +49,7 @@ static class BuiltInCloudProviderValidator
                 "Cloud provider configuration is required."));
             return new PantsCloudValidationReport(findings);
         }
+
 
         switch (provider)
         {
@@ -102,7 +106,8 @@ static class BuiltInCloudProviderValidator
     static void ValidateAws(
         List<PantsCloudValidationFinding> findings,
         ImmutableArray<PantsCloudStorageRole> roles,
-        PantsAwsS3Provider provider)
+        PantsAwsS3Provider provider
+    )
     {
         if (!ValidAwsBucket(provider.Bucket))
         {
@@ -131,7 +136,8 @@ static class BuiltInCloudProviderValidator
     static void ValidateS3Compatible(
         List<PantsCloudValidationFinding> findings,
         ImmutableArray<PantsCloudStorageRole> roles,
-        PantsS3CompatibleProvider provider)
+        PantsS3CompatibleProvider provider
+    )
     {
         if (!ValidTransportComponent(provider.Bucket))
         {
@@ -166,9 +172,11 @@ static class BuiltInCloudProviderValidator
     static void ValidateOci(
         List<PantsCloudValidationFinding> findings,
         ImmutableArray<PantsCloudStorageRole> roles,
-        PantsOciObjectStorageProvider provider)
+        PantsOciObjectStorageProvider provider
+    )
     {
         var kind = PantsCloudProviderId.OciObjectStorage;
+
         if (!SafeDnsComponent(provider.Namespace) || !SafeDnsComponent(provider.Region))
         {
             findings.Add(Failure(
@@ -176,6 +184,7 @@ static class BuiltInCloudProviderValidator
                 roles,
                 "OCI namespace and region must be safe DNS components."));
         }
+
 
         if (string.IsNullOrEmpty(provider.Bucket) ||
             provider.Bucket.Length > 256 ||
@@ -236,10 +245,12 @@ static class BuiltInCloudProviderValidator
     static void ValidateAzure(
         List<PantsCloudValidationFinding> findings,
         ImmutableArray<PantsCloudStorageRole> roles,
-        PantsAzureBlobProvider provider)
+        PantsAzureBlobProvider provider
+    )
     {
         var kind = PantsCloudProviderId.AzureBlob;
         var connectionString = provider.Credential is PantsAzureCredentialSource.ConnectionString;
+
         if (!connectionString &&
             (provider.Account.Length is < 3 or > 24 ||
              !provider.Account.All(static character =>
@@ -250,6 +261,7 @@ static class BuiltInCloudProviderValidator
                 roles,
                 "Azure account must be 3-24 lowercase ASCII letters or digits."));
         }
+
 
         if (!ValidAzureContainer(provider.Container))
         {
@@ -303,9 +315,11 @@ static class BuiltInCloudProviderValidator
     static void ValidateGcs(
         List<PantsCloudValidationFinding> findings,
         ImmutableArray<PantsCloudStorageRole> roles,
-        PantsGcsProvider provider)
+        PantsGcsProvider provider
+    )
     {
         var kind = PantsCloudProviderId.Gcs;
+
         if (!ValidGcsBucket(provider.Bucket))
         {
             findings.Add(Failure(
@@ -313,6 +327,7 @@ static class BuiltInCloudProviderValidator
                 roles,
                 "GCS bucket violates published naming rules."));
         }
+
 
         if (string.IsNullOrWhiteSpace(provider.ProjectId))
         {
@@ -358,7 +373,8 @@ static class BuiltInCloudProviderValidator
         PantsCloudProviderId kind,
         ImmutableArray<PantsCloudStorageRole> roles,
         PantsS3CredentialSource? credential,
-        bool allowAwsDefaultChain)
+        bool allowAwsDefaultChain
+    )
     {
         switch (credential)
         {
@@ -394,7 +410,8 @@ static class BuiltInCloudProviderValidator
         PantsCloudProviderId kind,
         ImmutableArray<PantsCloudStorageRole> roles,
         Uri? endpoint,
-        bool requireHttpsOrigin)
+        bool requireHttpsOrigin
+    )
     {
         var valid = endpoint is not null && endpoint.IsAbsoluteUri &&
                     (endpoint.Scheme == Uri.UriSchemeHttp || endpoint.Scheme == Uri.UriSchemeHttps) &&
@@ -404,6 +421,7 @@ static class BuiltInCloudProviderValidator
                     string.IsNullOrEmpty(endpoint.Fragment) &&
                     (!requireHttpsOrigin ||
                      (endpoint.Scheme == Uri.UriSchemeHttps && endpoint.AbsolutePath == "/"));
+
         if (!valid)
         {
             findings.Add(Failure(
@@ -419,7 +437,8 @@ static class BuiltInCloudProviderValidator
         PantsCloudProviderId kind,
         ImmutableArray<PantsCloudStorageRole> roles,
         string message,
-        PantsCloudFailureKind failureKind = PantsCloudFailureKind.Configuration) => new(
+        PantsCloudFailureKind failureKind = PantsCloudFailureKind.Configuration
+    ) => new(
         kind,
         roles,
         PantsCloudValidationMode.Structural,

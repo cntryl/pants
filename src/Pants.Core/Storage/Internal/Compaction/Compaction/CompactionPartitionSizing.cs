@@ -27,12 +27,14 @@ static class CompactionPartitionSizing
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(requestedTargetBytes);
         var remaining = Math.Max(0, availableBytes);
         var partitionBytes = remaining - (remaining / SlackDivisor);
+
         if (partitionBytes < MinimumOutputPartitionBytes)
         {
             throw PantsException.ResourceLimit(
                 $"Compaction inputs leave {remaining} bytes of the maintenance pool for output; " +
                 $"at least {MinimumOutputPartitionBytes} bytes of output partition are required.");
         }
+
 
         return Math.Min(requestedTargetBytes, partitionBytes);
     }

@@ -15,10 +15,12 @@ sealed class DelegatingCloudProvider(
 
     public async ValueTask<IPantsCloudObjectStore> OpenObjectStoreAsync(
         PantsCloudProviderContext context,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         OpenToken = cancellationToken;
         Started.TrySetResult();
+
         try
         {
             return await open(cancellationToken).ConfigureAwait(false);

@@ -19,7 +19,8 @@ sealed class CloudControlMetadataSnapshot : IDisposable
         ManifestState[] manifests,
         ManifestState? authoritativeManifest,
         IDisposable reservation,
-        MetadataAccountingHandle? bootstrapAccounting = null)
+        MetadataAccountingHandle? bootstrapAccounting = null
+    )
     {
         _reservation = reservation;
         BootstrapAccounting = bootstrapAccounting;
@@ -56,8 +57,10 @@ sealed class CloudControlMetadataSnapshot : IDisposable
     public static CloudControlMetadataSnapshot CreateBootstrapCandidate(ResourceBudget budget) =>
         CreateBootstrapCandidate(budget, out _);
 
-    internal static CloudControlMetadataSnapshot CreateBootstrapCandidate(ResourceBudget budget,
-        out MetadataAccountingHandle accounting)
+    internal static CloudControlMetadataSnapshot CreateBootstrapCandidate(
+        ResourceBudget budget,
+        out MetadataAccountingHandle accounting
+    )
     {
         // FORMAT 9's empty manifest has a fixed, small shape. Admit its complete encoded/decoded
         // envelope before creating any payload, independently of the later persistent runtime.
@@ -67,6 +70,7 @@ sealed class CloudControlMetadataSnapshot : IDisposable
         using var checkpoint = owner.Begin(MetadataOperationKind.Checkpoint, MetadataOrigin.Bootstrap,
             MetadataMedium.MemoryOnly);
         IDisposable? reservation = null;
+
         try
         {
             reservation = budget.Reserve(GetWorkspaceBytes(maximumEncodedBytes));
@@ -74,10 +78,12 @@ sealed class CloudControlMetadataSnapshot : IDisposable
             var encoded = ManifestCodec.Encode(manifest,
                 new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower });
             var format = "midge-format-version=9\n"u8.ToArray();
+
             if (encoded.Length + format.Length > maximumEncodedBytes)
             {
                 throw new PantsResourceLimitException("The empty bootstrap manifest exceeds its fixed admission envelope.");
             }
+
 
             using var formatWrite = owner.Begin(MetadataOperationKind.OtherMetadata, MetadataOrigin.Bootstrap,
                 MetadataMedium.MemoryOnly);
@@ -116,6 +122,7 @@ sealed class CloudControlMetadataSnapshot : IDisposable
     {
         using var staging = new MemoryStream(bytes.Length);
         observation.Issued(checked((ulong)bytes.Length));
+
         try
         {
             staging.Write(bytes);
@@ -126,13 +133,15 @@ sealed class CloudControlMetadataSnapshot : IDisposable
             observation.Mutation();
             throw;
         }
+
         return staging.ToArray();
     }
 
     public static CloudControlMetadataSnapshot Capture(
         string root,
         string[] fileNames,
-        ResourceBudget budget)
+        ResourceBudget budget
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         ArgumentNullException.ThrowIfNull(fileNames);
@@ -140,16 +149,20 @@ sealed class CloudControlMetadataSnapshot : IDisposable
 
         var openedFiles = new List<(string Name, SafeFileHandle Handle, int Length)>(fileNames.Length);
         IDisposable? reservation = null;
+
         try
         {
             long totalBytes = 0;
+
             foreach (var fileName in fileNames)
             {
                 var path = Path.Combine(root, fileName);
+
                 if (!File.Exists(path))
                 {
                     continue;
                 }
+
 
                 StoragePathGuard.EnsureNotLink(path);
                 SafeFileHandle? handle = File.OpenHandle(
@@ -158,14 +171,17 @@ sealed class CloudControlMetadataSnapshot : IDisposable
                     FileAccess.Read,
                     FileShare.ReadWrite | FileShare.Delete,
                     FileOptions.RandomAccess);
+
                 try
                 {
                     var length = RandomAccess.GetLength(handle);
+
                     if (length > Array.MaxLength)
                     {
                         throw new PantsResourceLimitException(
                             $"Cloud control metadata file '{fileName}' exceeds the supported byte-array size.");
                     }
+
 
                     totalBytes = checked(totalBytes + length);
                     openedFiles.Add((fileName, handle, checked((int)length)));
@@ -177,19 +193,24 @@ sealed class CloudControlMetadataSnapshot : IDisposable
                 }
             }
 
+
             reservation = budget.Reserve(GetWorkspaceBytes(totalBytes));
 
             var files = new Dictionary<string, ReadOnlyMemory<byte>>(openedFiles.Count, StringComparer.Ordinal);
+
             foreach (var (name, handle, length) in openedFiles)
             {
                 files.Add(name, PositionalFile.ReadExactly(handle, 0, length));
             }
 
+
             var manifests = new List<ManifestState>(1);
+
             if (files.ContainsKey("manifest.snapshot.json"))
             {
                 manifests.Add(CloudManifestReader.DecodeMetadata(files));
             }
+
 
             var authoritativeManifest = manifests.FirstOrDefault();
             var snapshot = new CloudControlMetadataSnapshot(
@@ -209,6 +230,7 @@ sealed class CloudControlMetadataSnapshot : IDisposable
         finally
         {
             reservation?.Dispose();
+
             foreach (var (_, handle, _) in openedFiles)
             {
                 handle.Dispose();

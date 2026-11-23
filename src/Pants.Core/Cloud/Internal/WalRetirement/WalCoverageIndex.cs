@@ -14,10 +14,12 @@ sealed class WalCoverageIndex
     public WalCoverageIndex(ManifestState manifest)
     {
         _byName = new Dictionary<string, FileMeta>(StringComparer.Ordinal);
+
         foreach (var file in manifest.Files)
         {
             _byName[file.Name] = file;
         }
+
 
         _droppedFamilyDropSequences = manifest.ColumnFamilies
             .Where(static family => family.DeletedAt.HasValue && family.DropSequence.HasValue)
@@ -59,7 +61,8 @@ sealed class WalCoverageIndex
     public bool TryFindCovering(
         WalMutation mutation,
         out FileMeta? file,
-        out ulong? droppedFamilyDropSequence)
+        out ulong? droppedFamilyDropSequence
+    )
     {
         if (_droppedFamilyDropSequences.TryGetValue(
                 mutation.ColumnFamilyId,
@@ -96,7 +99,8 @@ sealed class WalCoverageIndex
     /// </summary>
     public bool StillContains(
         IReadOnlyDictionary<string, FileMeta> files,
-        IReadOnlyDictionary<uint, ulong> droppedFamilies)
+        IReadOnlyDictionary<uint, ulong> droppedFamilies
+    )
     {
         foreach (var (name, file) in files)
         {

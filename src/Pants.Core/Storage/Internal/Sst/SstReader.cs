@@ -22,7 +22,8 @@ sealed class SstReader : IDisposable
         byte[]? blockBlooms,
         TrieIndex? trieIndex,
         IReadOnlyList<RangeTombstone> rangeTombstones,
-        IDisposable? handleReservation)
+        IDisposable? handleReservation
+    )
     {
         _file = file;
         _fileLength = fileLength;
@@ -46,10 +47,12 @@ sealed class SstReader : IDisposable
             const int fixedOverhead = 512;
             const int perIndexEntryOverhead = 56;
             long bytes = fixedOverhead + (_blockBlooms?.Length ?? 0);
+
             foreach (var (firstKey, _) in _index)
             {
                 bytes += firstKey.Length + perIndexEntryOverhead;
             }
+
 
             if (_trieIndex is not null)
             {
@@ -92,10 +95,12 @@ sealed class SstReader : IDisposable
     public byte[] GetFirstKey(int blockIndex)
     {
         ThrowIfDisposed();
+
         if ((uint)blockIndex >= (uint)_index.Length)
         {
             throw new PantsCorruptionException("SST block index is invalid.");
         }
+
 
         return _index[blockIndex].FirstKey.ToArray();
     }
@@ -103,10 +108,12 @@ sealed class SstReader : IDisposable
     public SstBlockHandle GetDataBlockHandle(int blockIndex)
     {
         ThrowIfDisposed();
+
         if ((uint)blockIndex >= (uint)_index.Length)
         {
             throw new PantsCorruptionException("SST block index is invalid.");
         }
+
 
         return _index[blockIndex].Handle;
     }
@@ -134,6 +141,7 @@ sealed class SstReader : IDisposable
 
         SafeFileHandle? file = null;
         SstMetadataAllocation? allocation = null;
+
         try
         {
             allocation = metadataBudget is null ? null : new SstMetadataAllocation(metadataBudget, path);
@@ -144,6 +152,7 @@ sealed class SstReader : IDisposable
                 FileShare.ReadWrite | FileShare.Delete,
                 FileOptions.RandomAccess);
             var fileLength = RandomAccess.GetLength(file);
+
             if (fileLength < DiskFormat.SstFooterSize)
             {
                 if (fileLength >= sizeof(ulong))
@@ -152,6 +161,7 @@ sealed class SstReader : IDisposable
                         file,
                         fileLength - sizeof(ulong),
                         sizeof(ulong));
+
                     if (BinaryPrimitives.ReadUInt64LittleEndian(trailingMagic) == DiskFormat.SstFooterMagic)
                     {
                         throw new PantsCompatibilityException(
@@ -161,6 +171,7 @@ sealed class SstReader : IDisposable
 
                 throw new PantsCorruptionException("SST is shorter than its V5 footer.");
             }
+
 
             var footerOffset = fileLength - DiskFormat.SstFooterSize;
             var footer = PositionalFile.ReadExactly(
@@ -186,12 +197,14 @@ sealed class SstReader : IDisposable
             var blockBlooms = bloomHandle is { } bloom
                 ? ReadMetadataBlock(file, fileLength, bloom, allocation)
                 : null;
+
             if (blockBlooms is not null)
             {
                 SstCodec.ValidateBlockBlooms(blockBlooms, index.Length);
                 retainedMetadataBytes = checked(retainedMetadataBytes + blockBlooms.Length);
                 allocation?.Retain(retainedMetadataBytes);
             }
+
 
             var trie = trieHandle is { } trieBlock
                 ? ReadMetadataBlock(file, fileLength, trieBlock, allocation)
@@ -246,7 +259,11 @@ sealed class SstReader : IDisposable
     }
 
     static byte[] ReadMetadataBlock(
-        SafeFileHandle file, long length, SstBlockHandle handle, SstMetadataAllocation? allocation) =>
+        SafeFileHandle file,
+        long length,
+        SstBlockHandle handle,
+        SstMetadataAllocation? allocation
+    ) =>
         allocation is null ? SstCodec.ReadBlock(file, length, handle) : allocation.ReadBlock(file, length, handle);
 
     public SstReadBlock ReadDataBlockOwned(int blockIndex, ResourceBudget? resourceBudget)
@@ -260,19 +277,23 @@ sealed class SstReader : IDisposable
     public SstPointReadDecision GetPointReadDecision(ReadOnlySpan<byte> key)
     {
         ThrowIfDisposed();
+
         if (_index.Length == 0)
         {
             return new SstPointReadDecision(0, 0, 0, false, -1, 0);
         }
 
+
         var trieCandidate = _trieIndex?.FindFloorBlock(key) ?? -1;
         var candidate = trieCandidate >= 0
             ? trieCandidate
             : SstCodec.FindFloorBlock(_index, key);
+
         if (candidate < 0)
         {
             return new SstPointReadDecision(0, 0, 0, false, -1, 0);
         }
+
 
         var mightContain = _blockBlooms is null || SstCodec.BloomMightContain(_blockBlooms, candidate, key);
         var bloomChecks = _blockBlooms is null ? 0 : 1;
@@ -286,10 +307,12 @@ sealed class SstReader : IDisposable
     public byte[] ReadDataBlock(int blockIndex)
     {
         ThrowIfDisposed();
+
         if ((uint)blockIndex >= (uint)_index.Length)
         {
             throw new PantsCorruptionException("SST point-read block index is invalid.");
         }
+
 
         SstCodec.ValidateDataBlockSize(_index[blockIndex].Handle);
         return SstCodec.ReadBlock(_file, _fileLength, _index[blockIndex].Handle);

@@ -62,6 +62,7 @@ public sealed class SstFlushFootprintTests
         var random = new Random(163);
         var entries = new List<SstEntry>();
         var mutations = new List<WalMutation>();
+
         for (var index = 0; index < 256; index++)
         {
             var key = index < 128
@@ -80,12 +81,14 @@ public sealed class SstFlushFootprintTests
                 null));
         }
 
+
         var longKey = RandomBytes(random, 32 * 1024);
         var longValue = RandomBytes(random, 16 * 1024);
         entries.Add(new SstEntry(longKey, longValue, 257, null, false));
         mutations.Add(new WalMutation(0, WalOperation.Put, longKey, longValue, 257, null, null));
 
         var ranges = new List<RangeTombstone>();
+
         for (var index = 0; index < 8; index++)
         {
             var start = System.Text.Encoding.UTF8.GetBytes($"range-{index:D2}");
@@ -101,6 +104,7 @@ public sealed class SstFlushFootprintTests
                 null,
                 end));
         }
+
 
         var encoded = SstCodec.Encode(entries, ranges, goal);
 

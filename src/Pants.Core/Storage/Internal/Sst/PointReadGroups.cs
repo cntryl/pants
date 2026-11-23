@@ -24,12 +24,14 @@ static class PointReadGroups
     {
         ArgumentNullException.ThrowIfNull(candidates);
         var ordered = true;
+
         for (var index = 1; index < candidates.Count && ordered; index++)
         {
             ordered = candidates[index - 1].Level <= candidates[index].Level;
         }
 
         // OrderBy is a stable sort, so files keep their relative order within a level.
+
         return ordered ? candidates : [.. candidates.OrderBy(static file => file.Level)];
     }
 
@@ -47,10 +49,12 @@ static class PointReadGroups
         ArgumentNullException.ThrowIfNull(candidates);
         var level = candidates[start].Level;
         var levelEnd = start + 1;
+
         while (levelEnd < candidates.Count && candidates[levelEnd].Level == level)
         {
             levelEnd++;
         }
+
 
         if (level != 0)
         {
@@ -66,20 +70,24 @@ static class PointReadGroups
         }
 
         var groupOldest = ulong.MaxValue;
+
         for (var index = start; index < levelEnd; index++)
         {
             groupOldest = Math.Min(groupOldest, candidates[index].SmallestSequence!.Value);
             var restIsOlder = true;
+
             for (var later = index + 1; later < levelEnd && restIsOlder; later++)
             {
                 restIsOlder = candidates[later].LargestSequence!.Value < groupOldest;
             }
+
 
             if (restIsOlder)
             {
                 return index + 1;
             }
         }
+
 
         return levelEnd;
     }

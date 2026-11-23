@@ -35,10 +35,12 @@ public sealed class PantsWalSyncCountContractTests
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         var value = new byte[900];
+
         for (var index = 0; index < 6; index++)
         {
             transaction.Put(TestBytes.FromString($"key-{index}"), value);
         }
+
 
         Assert.NotEmpty(Directory.GetFiles(Path.Combine(directory.Path, "txn"), "*.run"));
         await transaction.CommitAsync(PantsWriteOptions.Sync);

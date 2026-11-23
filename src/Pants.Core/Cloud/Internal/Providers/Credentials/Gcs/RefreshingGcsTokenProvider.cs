@@ -23,7 +23,8 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
         HttpClient httpClient,
         PantsGcsCredentialSource source,
         TimeSpan timeout,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider
+    )
     {
         _httpClient = httpClient;
         _source = source;
@@ -42,12 +43,15 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
     public async ValueTask<string> GetTokenAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
         if (_cached is { } cached && !cached.RequiresRefresh(_timeProvider.GetUtcNow()))
         {
             return cached.Value;
         }
 
+
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
         try
         {
             if (_cached is { } current && !current.RequiresRefresh(_timeProvider.GetUtcNow()))
@@ -84,10 +88,12 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
     {
         var configuredPath = Environment.GetEnvironmentVariable(
             "GOOGLE_APPLICATION_CREDENTIALS");
+
         if (configuredPath is not null)
         {
             return RefreshCredentialFileAsync(configuredPath, cancellationToken);
         }
+
 
         var defaultPath = DefaultApplicationCredentialPath();
         return defaultPath is not null && File.Exists(defaultPath)
@@ -97,7 +103,8 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
 
     async ValueTask<GcsAccessToken> RefreshCredentialFileAsync(
         string path,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var document = await ReadCredentialFileAsync(path, cancellationToken)
             .ConfigureAwait(false);
@@ -121,7 +128,8 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
 
     async ValueTask<GcsAccessToken> RefreshServiceAccountAsync(
         JsonElement root,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var email = GetRequiredString(root, "client_email");
         var privateKey = GetRequiredString(root, "private_key");
@@ -140,6 +148,7 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
         });
         var unsigned = $"{header}.{Base64Url(Encoding.UTF8.GetBytes(claims))}";
         using var rsa = RSA.Create();
+
         try
         {
             rsa.ImportFromPem(privateKey);
@@ -157,6 +166,7 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
                 exception);
         }
 
+
         var assertion = $"{unsigned}.{Base64Url(rsa.SignData(
             Encoding.UTF8.GetBytes(unsigned),
             HashAlgorithmName.SHA256,
@@ -173,7 +183,8 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
 
     ValueTask<GcsAccessToken> RefreshAuthorizedUserAsync(
         JsonElement root,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var tokenUri = GetOptionalString(root, "token_uri") ??
                        "https://oauth2.googleapis.com/token";
@@ -207,7 +218,8 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
     async ValueTask<GcsAccessToken> RequestTokenAsync(
         Uri uri,
         IReadOnlyDictionary<string, string> fields,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, uri)
         {
@@ -223,12 +235,14 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
 
     async ValueTask<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var deadline = new CancellationTokenSource(_timeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             deadline.Token);
+
         try
         {
             return await _httpClient.SendAsync(
@@ -251,9 +265,11 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
     internal static async ValueTask<GcsAccessToken> ParseTokenResponseAsync(
         HttpResponseMessage response,
         TimeProvider timeProvider,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         JsonDocument document;
+
         try
         {
             document = JsonDocument.Parse(
@@ -265,21 +281,26 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
             throw new PantsIOException("GCS token response JSON is malformed.", exception);
         }
 
+
         using (document)
         {
             var root = document.RootElement;
+
             if (root.ValueKind != JsonValueKind.Object)
             {
                 throw new PantsIOException(
                     "GCS token response must be a JSON object.");
             }
 
+
             var token = GetOptionalString(root, "access_token");
+
             if (string.IsNullOrWhiteSpace(token))
             {
                 throw new PantsIOException(
                     "GCS token response omitted a non-empty access_token.");
             }
+
 
             if (!root.TryGetProperty("expires_in", out var expires) ||
                 expires.ValueKind != JsonValueKind.Number ||
@@ -293,6 +314,7 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
 
             var now = timeProvider.GetUtcNow();
             DateTimeOffset expiresAt;
+
             try
             {
                 expiresAt = now.AddSeconds((long)lifetime);
@@ -303,6 +325,7 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
                     "GCS token response expires_in did not yield a future expiry.",
                     exception);
             }
+
 
             if (expiresAt <= now)
             {
@@ -332,7 +355,8 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
 
     static async ValueTask<JsonDocument> ReadCredentialFileAsync(
         string path,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (string.IsNullOrWhiteSpace(path))
         {

@@ -18,7 +18,8 @@ sealed class CloudWorkScheduler : IAsyncDisposable
     public CloudWorkScheduler(
         RuntimeWorker worker,
         Func<CancellationToken, ValueTask> operation,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null
+    )
         : this(
             worker,
             async cancellationToken =>
@@ -37,7 +38,8 @@ sealed class CloudWorkScheduler : IAsyncDisposable
     public CloudWorkScheduler(
         RuntimeWorker worker,
         Func<CancellationToken, ValueTask<CloudWorkOutcome>> operation,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null
+    )
     {
         _worker = worker;
         _operation = operation;
@@ -99,6 +101,7 @@ sealed class CloudWorkScheduler : IAsyncDisposable
             }
 
             _requested = true;
+
             if (_pumpTask is null)
             {
                 Volatile.Write(ref _outstanding, 1);
@@ -110,9 +113,11 @@ sealed class CloudWorkScheduler : IAsyncDisposable
     async Task RunAsync()
     {
         var retryDelay = InitialRetryDelay;
+
         while (TryTakeRequest())
         {
             var outcome = CloudWorkOutcome.RetryLater;
+
             try
             {
                 await _worker.ExecuteAsync(
@@ -130,6 +135,7 @@ sealed class CloudWorkScheduler : IAsyncDisposable
             {
                 outcome = CloudWorkOutcome.RetryLater;
             }
+
 
             if (outcome == CloudWorkOutcome.Completed)
             {

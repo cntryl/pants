@@ -21,10 +21,12 @@ sealed class BackgroundWriteLimiter(ulong bytesPerSecond, TimeProvider timeProvi
     public void Acquire(int bytes, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+
         if (bytes == 0 || IsUrgent)
         {
             return;
         }
+
         var numerator = (UInt128)(uint)bytes * (ulong)timeProvider.TimestampFrequency;
         var interval = (numerator + bytesPerSecond - 1) / bytesPerSecond;
         long until;
@@ -32,17 +34,21 @@ sealed class BackgroundWriteLimiter(ulong bytesPerSecond, TimeProvider timeProvi
         lock (_gate)
         {
             start = Math.Max(_next, timeProvider.GetTimestamp());
+
             if (interval > (UInt128)(ulong)(long.MaxValue - start))
             {
                 throw PantsException.ResourceLimit("The background write rate exceeds the supported monotonic interval.");
             }
+
             until = checked(start + (long)interval);
             _next = until;
         }
         waitObserved?.Invoke(bytes, start, until);
+
         while (timeProvider.GetTimestamp() < until)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
             if (IsUrgent)
             {
                 lock (_gate)
@@ -51,8 +57,10 @@ sealed class BackgroundWriteLimiter(ulong bytesPerSecond, TimeProvider timeProvi
                 }
                 return;
             }
+
             Thread.Sleep(1);
         }
+
         Interlocked.Add(ref _limitedBytes, bytes);
     }
 

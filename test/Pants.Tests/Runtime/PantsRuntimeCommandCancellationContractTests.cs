@@ -27,6 +27,7 @@ public sealed class PantsRuntimeCommandCancellationContractTests
 
         _ = await blockedMetrics.WaitAsync(TestTimeouts.Expected);
         IPantsTransaction? transaction = null;
+
         try
         {
             transaction = await begin.WaitAsync(TestTimeouts.Expected);
@@ -34,6 +35,7 @@ public sealed class PantsRuntimeCommandCancellationContractTests
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
         }
+
 
         if (transaction is not null)
         {

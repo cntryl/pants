@@ -25,6 +25,7 @@ public abstract class YcsbSystemBenchmark : Tier4Benchmark
         _path = Path.Combine(Path.GetTempPath(), $"pants-tier4-ycsb-{Workload}-{Guid.NewGuid():N}");
         _database = await PantsDatabase.OpenAsync(Tier4Database.Options(_path, Scenario.StorageMode));
         _value = Tier4Data.Value(256);
+
         for (var start = 0; start < InitialKeyCount; start += BatchSize)
         {
             var entries = Enumerable.Range(start, BatchSize).Select(index => (Tier4Data.Key(index), _value));
@@ -50,25 +51,31 @@ public abstract class YcsbSystemBenchmark : Tier4Benchmark
         var tasks = Enumerable.Range(0, Scenario.Clients).Select(client => Task.Run(async () =>
         {
             var localCompleted = 0;
+
             while (true)
             {
                 var operation = Interlocked.Increment(ref nextOperation);
+
                 if (operation >= OperationCount)
                 {
                     break;
                 }
 
+
                 await ExecuteAsync(operation, client);
                 localCompleted++;
             }
 
+
             Interlocked.Add(ref completed, localCompleted);
         }));
         await Task.WhenAll(tasks);
+
         if (completed != OperationCount)
         {
             throw new InvalidOperationException($"Completed {completed} operations; expected {OperationCount}.");
         }
+
 
         return completed;
     }
@@ -77,6 +84,7 @@ public abstract class YcsbSystemBenchmark : Tier4Benchmark
     {
         var selector = (operation * 17 + client * 31) % 100;
         var keyIndex = KeyIndex(operation, client);
+
         switch (Workload)
         {
             case YcsbWorkload.A:
@@ -152,6 +160,7 @@ public abstract class YcsbSystemBenchmark : Tier4Benchmark
             StartInclusive = Tier4Data.Key(keyIndex),
             Limit = 64
         });
+
         await foreach (var _ in scan)
         {
         }

@@ -12,17 +12,21 @@ sealed class TestRuntimeService(
 
     protected override async ValueTask<int> DispatchAsync(
         TestRuntimeRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _executedRequests.Add(request.Sequence);
+
         if (request.ShouldFail)
         {
             throw new InvalidOperationException($"Request {request.Sequence} failed.");
         }
 
+
         if (request.ShouldWait)
         {
             started?.TrySetResult();
+
             if (release is not null)
             {
                 await release.Task.WaitAsync(cancellationToken);

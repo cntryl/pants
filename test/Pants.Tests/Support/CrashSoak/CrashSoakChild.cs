@@ -24,6 +24,7 @@ static class CrashSoakChild
         var ledger = new CrashSoakLedgerWriter(CrashSoakStorage.LedgerPath(spec.Root, spec.Cycle));
         var killSwitch = new CrashSoakKillSwitch(ledger, cycle.CrashPlan);
         IPantsDatabase database;
+
         try
         {
             database = await PantsDatabase.OpenForTestingAsync(
@@ -37,6 +38,7 @@ static class CrashSoakChild
             throw;
         }
 
+
         var lanes = cycle.Lanes
             .Select(lane => Task.Run(() => RunLaneAsync(database, lane, ledger, killSwitch)))
             .ToArray();
@@ -49,11 +51,13 @@ static class CrashSoakChild
         IPantsDatabase database,
         IReadOnlyList<CrashSoakOperation> lane,
         CrashSoakLedgerWriter ledger,
-        CrashSoakKillSwitch killSwitch)
+        CrashSoakKillSwitch killSwitch
+    )
     {
         for (var index = 0; index < lane.Count; index++)
         {
             var operation = lane[index];
+
             try
             {
                 switch (operation.Kind)
@@ -118,9 +122,11 @@ static class CrashSoakChild
     static async Task RunMaintenanceAsync(
         CrashSoakOperation operation,
         CrashSoakLedgerWriter ledger,
-        Func<ValueTask> maintenance)
+        Func<ValueTask> maintenance
+    )
     {
         ledger.Dispatched(operation);
+
         try
         {
             await maintenance();
@@ -137,11 +143,13 @@ static class CrashSoakChild
         CrashSoakOperation winner,
         CrashSoakOperation loser,
         CrashSoakLedgerWriter ledger,
-        CrashSoakKillSwitch killSwitch)
+        CrashSoakKillSwitch killSwitch
+    )
     {
         await using var loserTransaction = await BeginAsync(database, loser);
         loserTransaction.SetConflictPolicy(PantsConflictPolicy.AbortOnWriteConflict);
         bool winnerAcked;
+
         try
         {
             await using var winnerTransaction = await BeginAsync(database, winner);
@@ -153,6 +161,7 @@ static class CrashSoakChild
         }
 
         // Without a committed winner nothing dooms the loser, so it is abandoned undispatched.
+
         if (winnerAcked)
         {
             await CommitExpectingConflictAsync(loserTransaction, loser, ledger, killSwitch);
@@ -164,10 +173,12 @@ static class CrashSoakChild
         var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
+
         foreach (var mutation in operation.Mutations)
         {
             mutation.ApplyTo(transaction);
         }
+
 
         return transaction;
     }
@@ -182,14 +193,17 @@ static class CrashSoakChild
         IPantsTransaction transaction,
         CrashSoakOperation operation,
         CrashSoakLedgerWriter ledger,
-        CrashSoakKillSwitch killSwitch)
+        CrashSoakKillSwitch killSwitch
+    )
     {
         ledger.Dispatched(operation);
         var commit = transaction.CommitAsync(ToWriteOptions(operation.Durability)).AsTask();
+
         if (killSwitch.ShouldKillAfterDispatch())
         {
             killSwitch.Kill($"dispatched op {operation.Id}");
         }
+
 
         try
         {
@@ -213,7 +227,8 @@ static class CrashSoakChild
         IPantsTransaction transaction,
         CrashSoakOperation operation,
         CrashSoakLedgerWriter ledger,
-        CrashSoakKillSwitch killSwitch)
+        CrashSoakKillSwitch killSwitch
+    )
     {
         try
         {

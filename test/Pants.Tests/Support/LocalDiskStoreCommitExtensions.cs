@@ -8,7 +8,8 @@ static class LocalDiskStoreCommitExtensions
         CommitPayload payload,
         RuntimeState state,
         PantsDurability durability,
-        WalMetricsRecorder? metrics = null)
+        WalMetricsRecorder? metrics = null
+    )
     {
         try
         {
@@ -33,7 +34,8 @@ static class LocalDiskStoreCommitExtensions
         RuntimeState state,
         PantsDurability durability,
         Action beforeSync,
-        WalMetricsRecorder? metrics = null)
+        WalMetricsRecorder? metrics = null
+    )
     {
         try
         {

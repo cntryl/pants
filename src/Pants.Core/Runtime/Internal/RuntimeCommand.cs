@@ -12,7 +12,8 @@ sealed class RuntimeCommand<T> : IRuntimeCommand
         long requestId,
         string requestKind,
         Action<T>? abandonedResponse,
-        CancellationToken callerCancellationToken)
+        CancellationToken callerCancellationToken
+    )
     {
         _operation = operation;
         _callerCancellationToken = callerCancellationToken;
@@ -37,10 +38,12 @@ sealed class RuntimeCommand<T> : IRuntimeCommand
             var publicException = RuntimeExceptionMapper.ToPublicException(
                 exception,
                 _callerCancellationToken);
+
             if (publicException is PantsNoSpaceException)
             {
                 state.RecordNoSpaceEvent();
             }
+
 
             _response.Fail(publicException);
         }

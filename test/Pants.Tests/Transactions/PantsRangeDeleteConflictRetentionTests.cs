@@ -12,10 +12,12 @@ public sealed class PantsRangeDeleteConflictRetentionTests
         {
             var family = database.ColumnFamilies.DefaultFamily;
             await SeedAsync(database, family, mode);
+
             if (stage != "memtable")
             {
                 await database.Maintenance.FlushAsync(family);
             }
+
 
             await using var stale = await database.Transactions.BeginAsync(
                 family,
@@ -39,10 +41,12 @@ public sealed class PantsRangeDeleteConflictRetentionTests
         {
             var family = database.ColumnFamilies.DefaultFamily;
             await SeedAsync(database, family, mode);
+
             if (stage != "memtable")
             {
                 await database.Maintenance.FlushAsync(family);
             }
+
 
             await using var stale = await database.Transactions.BeginAsync(
                 family,
@@ -66,10 +70,12 @@ public sealed class PantsRangeDeleteConflictRetentionTests
         {
             var family = database.ColumnFamilies.DefaultFamily;
             await SeedAsync(database, family, mode);
+
             if (stage != "memtable")
             {
                 await database.Maintenance.FlushAsync(family);
             }
+
 
             await using var stale = await database.Transactions.BeginAsync(
                 family,
@@ -93,22 +99,26 @@ public sealed class PantsRangeDeleteConflictRetentionTests
         {
             var family = database.ColumnFamilies.DefaultFamily;
             await SeedAsync(database, family, mode);
+
             if (stage != "memtable")
             {
                 await database.Maintenance.FlushAsync(family);
             }
+
 
             await using var stale = await database.Transactions.BeginAsync(
                 family,
                 PantsTransactionMode.ReadWrite);
             stale.SetConflictPolicy(PantsConflictPolicy.AbortOnWriteConflict);
             stale.Put("key-b"u8.ToArray(), "from-tx"u8.ToArray());
+
             for (var index = 0; index < 200; index++)
             {
                 stale.Put(
                     TestBytes.FromString($"spill-key-{index:0000}"),
                     TestBytes.FromString($"spill-value-{index:0000}"));
             }
+
 
             Assert.NotEmpty(TransactionSpillTestHarness.FindArtifacts(databasePath));
             await CommitCoveringRangeDeleteAsync(database, family, mode);
@@ -124,18 +134,21 @@ public sealed class PantsRangeDeleteConflictRetentionTests
     static async Task ForEachStageAsync(
         Func<IPantsDatabase, string, string, string, Task> scenario,
         bool includeMemory = true,
-        bool spill = false)
+        bool spill = false
+    )
     {
         var modes = spill
             ? new[] { "local", "cloud" }
             : includeMemory
                 ? new[] { "memory", "local", "cloud" }
                 : new[] { "local", "cloud" };
+
         foreach (var mode in modes)
         {
             var stages = mode == "memory"
                 ? new[] { "memtable" }
                 : new[] { "memtable", "flushed", "compacted" };
+
             foreach (var stage in stages)
             {
                 using var directory = new TemporaryDirectory();
@@ -178,7 +191,8 @@ public sealed class PantsRangeDeleteConflictRetentionTests
     static async Task SeedAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,
-        string mode)
+        string mode
+    )
     {
         await using var seed = await database.Transactions.BeginAsync(
             family,
@@ -190,7 +204,8 @@ public sealed class PantsRangeDeleteConflictRetentionTests
     static async Task CommitCoveringRangeDeleteAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,
-        string mode)
+        string mode
+    )
     {
         await using var concurrent = await database.Transactions.BeginAsync(
             family,
@@ -202,7 +217,8 @@ public sealed class PantsRangeDeleteConflictRetentionTests
     static async Task MoveTombstoneToStageAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,
-        string stage)
+        string stage
+    )
     {
         if (stage == "flushed")
         {

@@ -21,10 +21,12 @@ public sealed class PantsWalRotationCrashRecoveryTests
     public void ShouldAbortAtWalRotationBoundaryInChildProcess()
     {
         var boundaryName = Environment.GetEnvironmentVariable(BoundaryEnvironmentVariable);
+
         if (boundaryName is null)
         {
             return;
         }
+
 
         var path = Assert.IsType<string>(
             Environment.GetEnvironmentVariable(DatabaseEnvironmentVariable));
@@ -118,6 +120,7 @@ public sealed class PantsWalRotationCrashRecoveryTests
     static async Task WaitForLockReleaseAsync(string path)
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         while (true)
         {
             try
@@ -141,6 +144,7 @@ public sealed class PantsWalRotationCrashRecoveryTests
         var leasePath = Path.Combine(path, ".midge_leader");
         var lines = await File.ReadAllLinesAsync(leasePath);
         var updated = false;
+
         for (var index = 0; index < lines.Length; index++)
         {
             if (!lines[index].StartsWith("acquired_at: ", StringComparison.Ordinal))
@@ -152,12 +156,14 @@ public sealed class PantsWalRotationCrashRecoveryTests
             updated = true;
         }
 
+
         Assert.True(updated);
         // The edit invalidates the record checksum, so the expired copy carries none.
         await File.WriteAllLinesAsync(
             leasePath,
             lines.Where(static line => !line.StartsWith("checksum: ", StringComparison.Ordinal)));
         var acquisitionLockPath = Path.Combine(path, ".midge_leader.lock");
+
         if (File.Exists(acquisitionLockPath))
         {
             File.Delete(acquisitionLockPath);

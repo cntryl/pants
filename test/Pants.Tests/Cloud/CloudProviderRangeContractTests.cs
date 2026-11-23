@@ -13,10 +13,12 @@ public sealed class CloudProviderRangeContractTests
         get
         {
             var data = new TheoryData<string, HttpStatusCode, string[]>();
+
             foreach (var provider in new[] { "s3", "azure", "gcs-xml", "gcs-json" })
             {
                 data.Add(provider, HttpStatusCode.OK, ["bytes 2-4/10"]);
                 data.Add(provider, HttpStatusCode.NoContent, []);
+
                 foreach (var headers in new string[][]
                          {
                              [], ["invalid"], ["bytes 0-2/10"], ["bytes 2-5/10"],
@@ -29,6 +31,7 @@ public sealed class CloudProviderRangeContractTests
                 }
             }
 
+
             return data;
         }
     }
@@ -38,7 +41,8 @@ public sealed class CloudProviderRangeContractTests
     public async Task ShouldRejectIgnoredOrIncorrectRangesBeforeReadingTheBody(
         string provider,
         HttpStatusCode status,
-        string[] contentRanges)
+        string[] contentRanges
+    )
     {
         using var body = new ObservedStream(3);
         using var handler = new RangeHandler(() => body, status, contentRanges);
@@ -306,11 +310,13 @@ public sealed class CloudProviderRangeContractTests
         public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
             if (BytesRead == length && StallAtEnd)
             {
                 EndReadStarted.TrySetResult();
                 await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             }
+
 
             if (ResetAfter is { } resetAfter && BytesRead >= resetAfter)
             {
@@ -318,10 +324,12 @@ public sealed class CloudProviderRangeContractTests
             }
 
             var count = Math.Min(Math.Min(buffer.Length, MaximumRead), length - BytesRead);
+
             if (ResetAfter is { } limit)
             {
                 count = Math.Min(count, limit - BytesRead);
             }
+
 
             for (var index = 0; index < count; index++)
             {

@@ -39,6 +39,7 @@ static class WindowsPosixRename
             OpenExisting,
             OpenReparsePoint,
             0);
+
         if (handle.IsInvalid)
         {
             return false;
@@ -46,6 +47,7 @@ static class WindowsPosixRename
 
         // FILE_RENAME_INFO: { union { BOOLEAN ReplaceIfExists; DWORD Flags; }; HANDLE RootDirectory;
         // DWORD FileNameLength; WCHAR FileName[]; } with natural alignment.
+
         var name = Path.GetFullPath(destination);
         var rootDirectoryOffset = IntPtr.Size;
         var nameLengthOffset = 2 * IntPtr.Size;
@@ -53,6 +55,7 @@ static class WindowsPosixRename
         var nameBytes = name.Length * sizeof(char);
         var size = Math.Max(nameOffset + nameBytes + sizeof(char), 3 * IntPtr.Size);
         var buffer = Marshal.AllocHGlobal(size);
+
         try
         {
             Marshal.Copy(new byte[size], 0, buffer, size);
@@ -76,7 +79,8 @@ static class WindowsPosixRename
         nint securityAttributes,
         uint creationDisposition,
         uint flagsAndAttributes,
-        nint templateFile);
+        nint templateFile
+    );
 
     [DllImport("kernel32.dll", EntryPoint = "SetFileInformationByHandle", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -84,5 +88,6 @@ static class WindowsPosixRename
         SafeFileHandle file,
         int fileInformationClass,
         nint fileInformation,
-        uint bufferSize);
+        uint bufferSize
+    );
 }

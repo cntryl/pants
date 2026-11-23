@@ -127,9 +127,11 @@ public sealed class SstBlockIteratorTests
 
         Assert.True(iterator.MoveNext());
         Assert.True(budget.Current > 0);
+
         while (iterator.MoveNext())
         {
         }
+
 
         Assert.Equal(0, budget.Current);
     }
@@ -139,10 +141,12 @@ public sealed class SstBlockIteratorTests
         using var reader = SstReader.Open(path);
         using var iterator = SstBlockIterator.Create(reader, PantsScanDirection.Forward);
         long peak = 0;
+
         while (iterator.MoveNext())
         {
             peak = Math.Max(peak, iterator.CurrentBlockBytes);
         }
+
 
         return peak;
     }
@@ -150,10 +154,12 @@ public sealed class SstBlockIteratorTests
     static List<SstEntry> Drain(SstBlockIterator iterator)
     {
         var results = new List<SstEntry>();
+
         while (iterator.MoveNext())
         {
             results.Add(iterator.Current);
         }
+
 
         return results;
     }
@@ -162,7 +168,8 @@ public sealed class SstBlockIteratorTests
         string directory,
         int blockCount = 8,
         int entriesPerBlock = 16,
-        string fileName = "iterator.sst")
+        string fileName = "iterator.sst"
+    )
     {
         var path = Path.Combine(directory, fileName);
         var total = blockCount * entriesPerBlock;

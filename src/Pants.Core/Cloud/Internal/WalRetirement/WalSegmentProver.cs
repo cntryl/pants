@@ -17,7 +17,8 @@ sealed class WalSegmentProver(
         WalSegmentProof proof,
         PublishedManifest manifest,
         WalRetirementQuantum quantum,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         while (!proof.IsRead)
         {
@@ -32,10 +33,12 @@ sealed class WalSegmentProver(
             }
 
             ensureLeaseValid();
+
             if (!await ReadNextAsync(proof, manifest, cancellationToken).ConfigureAwait(false))
             {
                 return WalSegmentProofState.IdentityChanged;
             }
+
 
             quantum.RecordProgress();
         }
@@ -48,7 +51,8 @@ sealed class WalSegmentProver(
     async ValueTask<bool> ReadNextAsync(
         WalSegmentProof proof,
         PublishedManifest manifest,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (!_wholeObjectReads)
         {
@@ -68,9 +72,11 @@ sealed class WalSegmentProver(
     async ValueTask<bool> ReadRangesAsync(
         WalSegmentProof proof,
         PublishedManifest manifest,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var fetch = checked((int)Math.Min(pageBytes, proof.Remaining));
+
         while (true)
         {
             int required;
@@ -82,10 +88,12 @@ sealed class WalSegmentProver(
                                 fetch,
                                 cancellationToken).ConfigureAwait(false) ??
                             throw Missing(proof);
+
                 if (!StringComparer.Ordinal.Equals(range.Version, proof.Version))
                 {
                     return false;
                 }
+
 
                 if (range.Data.Length != fetch)
                 {
@@ -114,16 +122,19 @@ sealed class WalSegmentProver(
     async ValueTask<bool> ReadWholeObjectAsync(
         WalSegmentProof proof,
         PublishedManifest manifest,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var admitted = await admission.AdmitAsync(proof.Length, cancellationToken)
             .ConfigureAwait(false);
         var whole = await walStore.GetAsync(proof.Segment.ObjectKey, cancellationToken)
             .ConfigureAwait(false) ?? throw Missing(proof);
+
         if (!StringComparer.Ordinal.Equals(whole.Version, proof.Version))
         {
             return false;
         }
+
 
         if (whole.Data.Length != proof.Length)
         {

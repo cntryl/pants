@@ -74,7 +74,8 @@ public sealed class MidgeDurabilitySyncCountParityTests
         IPantsDatabase database,
         string key,
         string value,
-        PantsWriteOptions writeOptions)
+        PantsWriteOptions writeOptions
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -98,6 +99,7 @@ public sealed class MidgeDurabilitySyncCountParityTests
     static async Task WaitForLocalDurabilityAsync(IPantsDatabase database, ulong sequence)
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         while ((await database.Diagnostics.GetRuntimeMetricsAsync()).WalLocalDurableSequence < sequence)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);

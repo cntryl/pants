@@ -13,14 +13,17 @@ sealed class WalJsonBytesConverter : JsonConverter<byte[]>
         }
 
         var bytes = new List<byte>();
+
         while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
         {
             bytes.Add(reader.GetByte());
+
             if (bytes.Count > 16)
             {
                 throw new JsonException("A WAL digest exceeds 16 bytes.");
             }
         }
+
 
         if (bytes.Count != 16)
         {
@@ -33,10 +36,12 @@ sealed class WalJsonBytesConverter : JsonConverter<byte[]>
     public override void Write(Utf8JsonWriter writer, byte[] value, JsonSerializerOptions options)
     {
         writer.WriteStartArray();
+
         foreach (var item in value)
         {
             writer.WriteNumberValue(item);
         }
+
 
         writer.WriteEndArray();
     }

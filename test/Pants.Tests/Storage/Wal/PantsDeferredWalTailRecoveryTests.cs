@@ -45,6 +45,7 @@ public sealed class PantsDeferredWalTailRecoveryTests
             reopened.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
         Assert.Equal("prefix"u8.ToArray(), (await reader.GetAsync("acknowledged"u8.ToArray()))?.ToArray());
         var recoveredTail = await reader.GetAsync("tail"u8.ToArray());
+
         if (completeTail)
         {
             Assert.Equal("unacknowledged"u8.ToArray(), recoveredTail?.ToArray());

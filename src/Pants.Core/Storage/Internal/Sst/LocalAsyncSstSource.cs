@@ -19,18 +19,22 @@ sealed class LocalAsyncSstSource : IAsyncSstSource
     public async ValueTask<byte[]> ReadExactlyAsync(
         long offset,
         int length,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         ArgumentOutOfRangeException.ThrowIfNegative(offset);
         ArgumentOutOfRangeException.ThrowIfNegative(length);
+
         if (offset > Length || length > Length - offset)
         {
             throw new EndOfStreamException("The SST range is outside the file.");
         }
 
+
         var bytes = GC.AllocateUninitializedArray<byte>(length);
         var consumed = 0;
+
         while (consumed < length)
         {
             var read = await RandomAccess.ReadAsync(
@@ -39,13 +43,16 @@ sealed class LocalAsyncSstSource : IAsyncSstSource
                     checked(offset + consumed),
                     cancellationToken)
                 .ConfigureAwait(false);
+
             if (read == 0)
             {
                 throw new EndOfStreamException("The SST changed during a positional read.");
             }
 
+
             consumed = checked(consumed + read);
         }
+
 
         return bytes;
     }
@@ -70,6 +77,7 @@ sealed class LocalAsyncSstSource : IAsyncSstSource
             FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete,
             FileOptions.Asynchronous | FileOptions.RandomAccess);
+
         try
         {
             return new LocalAsyncSstSource(handle, RandomAccess.GetLength(handle));

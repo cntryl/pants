@@ -12,19 +12,23 @@ static class PracticalBenchmarkRunner
         var artifactPath = args.Length == 0
             ? Path.Combine("BenchmarkDotNet.Artifacts", "practical")
             : args[0];
+
         if (args.Length > 1)
         {
             Console.Error.WriteLine("Usage: practical [artifact-directory]");
             return 2;
         }
 
+
         var scenarios = BenchmarkInventory.DiscoverScenarioIds();
+
         if (scenarios.Count != 163 || scenarios.Distinct(StringComparer.Ordinal).Count() != scenarios.Count)
         {
             Console.Error.WriteLine(
                 $"Practical inventory must contain 163 unique scenarios; discovered {scenarios.Count}.");
             return 1;
         }
+
 
         Directory.CreateDirectory(artifactPath);
         var metadata = BenchmarkEnvironment.Capture("cold", scenarios.Count);

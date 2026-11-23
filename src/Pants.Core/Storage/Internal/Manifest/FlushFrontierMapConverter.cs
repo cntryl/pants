@@ -8,16 +8,20 @@ sealed class FlushFrontierMapConverter : JsonConverter<Dictionary<uint, ulong>>
     public override Dictionary<uint, ulong> Read(
         ref Utf8JsonReader reader,
         Type typeToConvert,
-        JsonSerializerOptions options)
+        JsonSerializerOptions options
+    )
     {
         using var document = JsonDocument.ParseValue(ref reader);
+
         if (document.RootElement.ValueKind != JsonValueKind.Array)
         {
             throw new JsonException("Flush frontiers must be an ordered array.");
         }
 
+
         var frontiers = new Dictionary<uint, ulong>();
         uint? previousId = null;
+
         foreach (var row in document.RootElement.EnumerateArray())
         {
             if (row.ValueKind != JsonValueKind.Object ||
@@ -34,6 +38,7 @@ sealed class FlushFrontierMapConverter : JsonConverter<Dictionary<uint, ulong>>
             frontiers.Add(id, throughSequence);
         }
 
+
         if (!frontiers.TryGetValue(0, out var defaultFrontier) || defaultFrontier == ulong.MaxValue)
         {
             throw new JsonException("Flush frontiers require a live default family at sequence zero or later.");
@@ -45,9 +50,11 @@ sealed class FlushFrontierMapConverter : JsonConverter<Dictionary<uint, ulong>>
     public override void Write(
         Utf8JsonWriter writer,
         Dictionary<uint, ulong> value,
-        JsonSerializerOptions options)
+        JsonSerializerOptions options
+    )
     {
         writer.WriteStartArray();
+
         foreach (var (id, throughSequence) in value.OrderBy(static pair => pair.Key))
         {
             writer.WriteStartObject();
@@ -55,6 +62,7 @@ sealed class FlushFrontierMapConverter : JsonConverter<Dictionary<uint, ulong>>
             writer.WriteNumber("through_sequence", throughSequence);
             writer.WriteEndObject();
         }
+
 
         writer.WriteEndArray();
     }

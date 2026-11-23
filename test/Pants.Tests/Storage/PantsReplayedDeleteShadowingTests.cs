@@ -23,6 +23,7 @@ public sealed class PantsReplayedDeleteShadowingTests
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             await CommitAsync(database, t => t.Delete(Key));
             Assert.Equal(Absent, await ReadAsync(database, Key));
+
             if (shutdown)
             {
                 await database.ShutdownAsync(TimeSpan.FromSeconds(10));
@@ -173,10 +174,12 @@ public sealed class PantsReplayedDeleteShadowingTests
             PantsTransactionMode.ReadOnly);
         var keys = new List<string>();
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
+
         await foreach (var entry in scan)
         {
             keys.Add(Encoding.UTF8.GetString(entry.Key.Span));
         }
+
 
         return [.. keys];
     }

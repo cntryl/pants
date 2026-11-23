@@ -8,14 +8,17 @@ static class StorageVerificationOutcomeResolver
 {
     public static async ValueTask<PantsStorageVerificationOutcome> VerifyPathAsync(
         string path,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(path);
         cancellationToken.ThrowIfCancellationRequested();
+
         if (StoragePathPreflight.Check(path) is { } pathFailure)
         {
             return pathFailure;
         }
+
 
         try
         {

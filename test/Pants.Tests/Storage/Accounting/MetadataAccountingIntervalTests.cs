@@ -100,11 +100,13 @@ public sealed class MetadataAccountingIntervalTests
     {
         var owner = new MetadataAccountingOwner();
         var before = owner.Handle.Snapshot();
+
         for (var index = 0; index < 1100; index++)
         {
             owner.RetainPublication(new MetadataPublicationReceipt($"output-{index}.sst", 0, (ulong)index, 128, 7,
                 MetadataOrigin.CloudFlush, MetadataMedium.Persistent, owner.Timestamp()));
         }
+
 
         using (owner.Begin(MetadataOperationKind.Checkpoint, MetadataOrigin.Administration, MetadataMedium.Persistent))
         {

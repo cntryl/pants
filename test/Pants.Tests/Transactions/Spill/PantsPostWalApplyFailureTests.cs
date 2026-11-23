@@ -17,10 +17,12 @@ public sealed class PantsPostWalApplyFailureTests
                 database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
             await using var write = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadWrite);
+
             for (var index = 0; index < 12; index++)
             {
                 write.Put(TestBytes.FromString($"row:{index:000}"), "v"u8.ToArray());
             }
+
 
             write.Put("zz:spill-trigger"u8.ToArray(), new byte[1800]);
             corruption.Path = Assert.Single(Directory.EnumerateFiles(Path.Combine(directory.Path, "txn"), "*.run"));
@@ -45,10 +47,12 @@ public sealed class PantsPostWalApplyFailureTests
         await using var reopened = await PantsDatabase.OpenAsync(options);
         await using var reader = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 12; index++)
         {
             Assert.Equal("v"u8.ToArray(), (await reader.GetAsync(TestBytes.FromString($"row:{index:000}")))?.ToArray());
         }
+
 
         Assert.Equal(1800, (await reader.GetAsync("zz:spill-trigger"u8.ToArray()))?.Length);
         Assert.Null(await reader.GetAsync("later"u8.ToArray()));
@@ -69,11 +73,13 @@ public sealed class PantsPostWalApplyFailureTests
             using var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete);
             long offset = 48;
             Span<byte> frame = stackalloc byte[8];
+
             for (var index = 0; index <= 3; index++)
             {
                 stream.Position = offset;
                 stream.ReadExactly(frame);
                 var length = BinaryPrimitives.ReadUInt32LittleEndian(frame);
+
                 if (index == 3)
                 {
                     stream.Position = offset + 8 + length - 1;
@@ -82,6 +88,7 @@ public sealed class PantsPostWalApplyFailureTests
                     stream.WriteByte((byte)(original ^ 0xff));
                     stream.Flush(true);
                 }
+
 
                 offset += 8 + length;
             }

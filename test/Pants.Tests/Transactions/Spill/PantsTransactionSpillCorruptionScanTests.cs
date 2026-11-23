@@ -167,11 +167,13 @@ public sealed class PantsTransactionSpillCorruptionScanTests
         var ordinalTableOffset = ReadHeaderOrdinalTableOffset(stream);
         var count = 0;
         var offset = (long)RunHeaderLength;
+
         while (offset < checked((long)ordinalTableOffset))
         {
             offset += FrameLength(stream, offset);
             count++;
         }
+
 
         return count;
     }
@@ -185,9 +187,11 @@ public sealed class PantsTransactionSpillCorruptionScanTests
             FileShare.ReadWrite | FileShare.Delete);
         var ordinalTableOffset = checked((long)ReadHeaderOrdinalTableOffset(stream));
         var offset = (long)RunHeaderLength;
+
         for (var index = 0; offset < ordinalTableOffset; index++)
         {
             var payloadLength = checked((long)ReadPayloadLength(stream, offset));
+
             if (index == frameIndex)
             {
                 var lastPayloadByte = offset + 8 + payloadLength - 1;
@@ -200,8 +204,10 @@ public sealed class PantsTransactionSpillCorruptionScanTests
                 return;
             }
 
+
             offset += 8 + payloadLength;
         }
+
 
         Assert.Fail($"The spill run has no data frame at index {frameIndex}.");
     }

@@ -51,6 +51,7 @@ public sealed class PantsCloudWalPruningTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(cloudHttpClient: client));
+
         for (var index = 0; index < 4; index++)
         {
             await CommitValueAsync(
@@ -61,6 +62,7 @@ public sealed class PantsCloudWalPruningTests
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             await WaitForProviderWalRetirementAsync(handler);
         }
+
 
         handler.ResetSstReadMetrics();
         var storedBefore = handler.SstStoredBytes;
@@ -459,7 +461,8 @@ public sealed class PantsCloudWalPruningTests
         IPantsDatabase database,
         IPantsColumnFamily columnFamily,
         ReadOnlyMemory<byte> key,
-        PantsWriteOptions writeOptions)
+        PantsWriteOptions writeOptions
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             columnFamily,

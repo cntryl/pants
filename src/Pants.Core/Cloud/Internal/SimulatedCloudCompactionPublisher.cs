@@ -13,7 +13,8 @@ sealed class SimulatedCloudCompactionPublisher
     public SimulatedCloudCompactionPublisher(
         string localRoot,
         IFailpointHandler failpoints,
-        SstPublicationAdmission sstPublicationAdmission)
+        SstPublicationAdmission sstPublicationAdmission
+    )
     {
         _localRoot = Path.GetFullPath(localRoot);
         _cloudRoot = Path.Combine(_localRoot, "cloud_store");
@@ -24,7 +25,8 @@ sealed class SimulatedCloudCompactionPublisher
 
     public async ValueTask PublishAsync(
         IReadOnlyList<string> outputNames,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(outputNames);
         cancellationToken.ThrowIfCancellationRequested();
@@ -39,11 +41,13 @@ sealed class SimulatedCloudCompactionPublisher
         }
 
         _failpoints.Hit(Failpoint.BeforeCloudUpload);
+
         foreach (var name in outputNames)
         {
             cancellationToken.ThrowIfCancellationRequested();
             await PublishOutputAsync(name, cancellationToken).ConfigureAwait(false);
         }
+
 
         _failpoints.Hit(Failpoint.AfterCloudUpload);
     }
@@ -51,12 +55,14 @@ sealed class SimulatedCloudCompactionPublisher
     async ValueTask PublishOutputAsync(string name, CancellationToken cancellationToken)
     {
         var objectKey = PantsCloudObjectLayout.SstPrefix + name;
+
         if (!CloudSstObjectKey.TryGetName(objectKey, out var validatedName) ||
             !StringComparer.Ordinal.Equals(validatedName, name))
         {
             throw new PantsCorruptionException(
                 $"Simulated-cloud compaction output name '{name}' is unsafe.");
         }
+
 
         var localPath = Path.Combine(_localRoot, "sst", validatedName);
         var localLength = new FileInfo(localPath).Length;
@@ -67,6 +73,7 @@ sealed class SimulatedCloudCompactionPublisher
         cancellationToken.ThrowIfCancellationRequested();
         var localBytes = File.ReadAllBytes(localPath);
         var remotePath = Path.Combine(_cloudRoot, "sst", validatedName);
+
         if (File.Exists(remotePath))
         {
             if (new FileInfo(remotePath).Length != localLength)
@@ -83,6 +90,7 @@ sealed class SimulatedCloudCompactionPublisher
 
             return;
         }
+
 
         AtomicStagedFile.Write(remotePath, localBytes);
     }

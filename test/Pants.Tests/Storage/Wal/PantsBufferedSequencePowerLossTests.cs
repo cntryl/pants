@@ -33,6 +33,7 @@ public sealed class PantsBufferedSequencePowerLossTests
             "buffered sequence reservation child",
             databasePath,
             readyPath);
+
         try
         {
             var marker = (await File.ReadAllLinesAsync(readyPath))
@@ -92,6 +93,7 @@ public sealed class PantsBufferedSequencePowerLossTests
             "recovered buffered WAL child",
             databasePath,
             readyPath);
+
         try
         {
             var marker = (await File.ReadAllLinesAsync(readyPath))
@@ -158,10 +160,12 @@ public sealed class PantsBufferedSequencePowerLossTests
     {
         var databasePath = Environment.GetEnvironmentVariable(DatabaseEnvironmentVariable);
         var readyPath = Environment.GetEnvironmentVariable(ReadyEnvironmentVariable);
+
         if (databasePath is null || readyPath is null)
         {
             return;
         }
+
 
         var failpoints = new BlockingWalSyncFailpointHandler();
         var state = new RuntimeState(
@@ -235,6 +239,7 @@ public sealed class PantsBufferedSequencePowerLossTests
     static async Task WaitForLockReleaseAsync(string path)
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         while (true)
         {
             try
@@ -258,6 +263,7 @@ public sealed class PantsBufferedSequencePowerLossTests
         var leasePath = Path.Combine(path, ".midge_leader");
         var lines = await File.ReadAllLinesAsync(leasePath);
         var updated = false;
+
         for (var index = 0; index < lines.Length; index++)
         {
             if (!lines[index].StartsWith("acquired_at: ", StringComparison.Ordinal))
@@ -269,11 +275,13 @@ public sealed class PantsBufferedSequencePowerLossTests
             updated = true;
         }
 
+
         Assert.True(updated);
         await File.WriteAllLinesAsync(
             leasePath,
             lines.Where(static line => !line.StartsWith("checksum: ", StringComparison.Ordinal)));
         var acquisitionLockPath = Path.Combine(path, ".midge_leader.lock");
+
         if (File.Exists(acquisitionLockPath))
         {
             File.Delete(acquisitionLockPath);
@@ -317,6 +325,7 @@ public sealed class PantsBufferedSequencePowerLossTests
 
             SyncAttempts++;
             WalLengthAtSync = new FileInfo(walPath).Length;
+
             if (throwOnSync)
             {
                 throw new IOException("Injected recovery WAL sync failure.");

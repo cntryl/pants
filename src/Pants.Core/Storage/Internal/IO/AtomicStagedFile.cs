@@ -17,16 +17,19 @@ static class AtomicStagedFile
     public static void CreateDirectoryDurably(
         string path,
         Action? beforeParentDirectorySync = null,
-        MetadataIoObservation? observation = null)
+        MetadataIoObservation? observation = null
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var fullPath = Path.GetFullPath(path);
         var missing = new Stack<string>();
         var current = fullPath;
+
         while (!Directory.Exists(current))
         {
             missing.Push(current);
             var parent = Path.GetDirectoryName(current);
+
             if (string.IsNullOrEmpty(parent) ||
                 StringComparerForPaths.Equals(parent, current))
             {
@@ -34,16 +37,20 @@ static class AtomicStagedFile
                     $"The parent directory for '{fullPath}' could not be resolved.");
             }
 
+
             current = parent;
         }
 
+
         var created = false;
+
         while (missing.TryPop(out var child))
         {
             MetadataIoObservation.Run(observation, () => Directory.CreateDirectory(child));
             SyncParentDirectory(child, beforeParentDirectorySync, observation);
             created = true;
         }
+
 
         if (!created)
         {
@@ -64,7 +71,8 @@ static class AtomicStagedFile
         string path,
         Func<SafeFileHandle, ValueTask> writePayloadAsync,
         bool overwrite = true,
-        MetadataIoObservation? observation = null)
+        MetadataIoObservation? observation = null
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(writePayloadAsync);
@@ -89,6 +97,7 @@ static class AtomicStagedFile
                        FileShare.None)))
             {
                 observation?.Mutation();
+
                 try
                 {
                     await writePayloadAsync(handle).ConfigureAwait(false);
@@ -97,6 +106,7 @@ static class AtomicStagedFile
                 {
                     observation?.Mutation();
                 }
+
                 MetadataIoObservation.Run(observation, () => RandomAccess.FlushToDisk(handle));
             }
 
@@ -130,7 +140,8 @@ static class AtomicStagedFile
         Action<string>? deleteTemporary = null,
         Action<Exception>? cleanupFailure = null,
         MetadataIoObservation? observation = null,
-        Action<string>? flushDirectory = null)
+        Action<string>? flushDirectory = null
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var fullPath = Path.GetFullPath(path);
@@ -138,6 +149,7 @@ static class AtomicStagedFile
                         throw new ArgumentException("A staged file path must have a parent directory.", nameof(path));
         StoragePathGuard.EnsureNotLink(fullPath);
         MetadataIoObservation.Run(observation, () => Directory.CreateDirectory(directory));
+
         if (temporaryFileName is not null &&
             (!string.Equals(Path.GetFileName(temporaryFileName), temporaryFileName, StringComparison.Ordinal) ||
              string.IsNullOrWhiteSpace(temporaryFileName)))
@@ -146,6 +158,7 @@ static class AtomicStagedFile
                 "A staged file name must be a non-empty file name without a directory.",
                 nameof(temporaryFileName));
         }
+
 
         var temporary = Path.Combine(
             directory,
@@ -161,6 +174,7 @@ static class AtomicStagedFile
                        FileShare.None)))
             {
                 observation?.Issued((ulong)bytes.Length);
+
                 try
                 {
                     RandomAccess.Write(handle, bytes, 0);
@@ -171,6 +185,7 @@ static class AtomicStagedFile
                     observation?.Mutation();
                     throw;
                 }
+
 
                 MetadataIoObservation.Run(observation, () => RandomAccess.FlushToDisk(handle));
             }
@@ -222,10 +237,12 @@ static class AtomicStagedFile
     static object[] CreatePublishLocks()
     {
         var locks = new object[PublishLockCount];
+
         for (var index = 0; index < locks.Length; index++)
         {
             locks[index] = new object();
         }
+
 
         return locks;
     }
@@ -249,10 +266,12 @@ static class AtomicStagedFile
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var fullPath = Path.GetFullPath(path);
         StoragePathGuard.EnsureNotLink(fullPath);
+
         if (!File.Exists(fullPath))
         {
             return;
         }
+
 
         MetadataIoObservation.Run(observation, () => File.Delete(fullPath));
         var directory = Path.GetDirectoryName(fullPath) ??
@@ -271,10 +290,12 @@ static class AtomicStagedFile
     static void SyncParentDirectory(string path, Action? beforeParentDirectorySync, MetadataIoObservation? observation)
     {
         var parent = Path.GetDirectoryName(path);
+
         if (parent is null)
         {
             return;
         }
+
 
         beforeParentDirectorySync?.Invoke();
         MetadataIoObservation.Run(observation, () => FlushParentDirectory(parent));
@@ -294,6 +315,7 @@ static class AtomicStagedFile
         var directoryUtf8 = Marshal.StringToCoTaskMemUTF8(directory);
         int descriptor;
         int openError;
+
         try
         {
             descriptor = Open(directoryUtf8, 0);
@@ -303,6 +325,7 @@ static class AtomicStagedFile
         {
             Marshal.FreeCoTaskMem(directoryUtf8);
         }
+
 
         if (descriptor < 0)
         {
@@ -341,6 +364,7 @@ static class AtomicStagedFile
             openExisting,
             backupSemantics,
             0);
+
         if (handle.IsInvalid)
         {
             throw CreateWindowsIOException(
@@ -348,6 +372,7 @@ static class AtomicStagedFile
                 directory,
                 Marshal.GetLastPInvokeError());
         }
+
 
         if (!FlushWindowsFileBuffers(handle))
         {
@@ -380,7 +405,8 @@ static class AtomicStagedFile
         nint securityAttributes,
         uint creationDisposition,
         uint flagsAndAttributes,
-        nint templateFile);
+        nint templateFile
+    );
 
     [DllImport("kernel32.dll", EntryPoint = "FlushFileBuffers", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

@@ -95,7 +95,8 @@ public sealed class ProviderCloudSstRangePinningTests
         public PinnedRangeHandler(
             string provider,
             bool replaceAfterHead = false,
-            long rangeTotalLength = 4) : this(
+            long rangeTotalLength = 4
+        ) : this(
             provider,
             null,
             replaceAfterHead,
@@ -106,7 +107,8 @@ public sealed class ProviderCloudSstRangePinningTests
         public PinnedRangeHandler(
             string provider,
             ObservedStream? rangeBody,
-            long rangeTotalLength) : this(
+            long rangeTotalLength
+        ) : this(
             provider,
             rangeBody,
             false,
@@ -118,7 +120,8 @@ public sealed class ProviderCloudSstRangePinningTests
             string provider,
             ObservedStream? rangeBody,
             bool replaceAfterHead,
-            long rangeTotalLength)
+            long rangeTotalLength
+        )
         {
             _provider = provider;
             _rangeBody = rangeBody;
@@ -134,7 +137,8 @@ public sealed class ProviderCloudSstRangePinningTests
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             if (IsMetadataRequest(request))
             {
@@ -149,6 +153,7 @@ public sealed class ProviderCloudSstRangePinningTests
 
             RangeRequests++;
             PinnedConditionObserved = HasExpectedCondition(request);
+
             if (_replaceAfterHead && PinnedConditionObserved)
             {
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.PreconditionFailed)
@@ -156,6 +161,7 @@ public sealed class ProviderCloudSstRangePinningTests
                     Content = new ByteArrayContent([])
                 });
             }
+
 
             HttpContent rangeBody = _rangeBody is null
                 ? new ByteArrayContent("ab"u8.ToArray())
@@ -212,10 +218,12 @@ public sealed class ProviderCloudSstRangePinningTests
                 },
                 Headers = { ETag = new EntityTagHeaderValue("\"v1\"") }
             };
+
             if (_provider == "gcs-xml")
             {
                 response.Headers.TryAddWithoutValidation("x-goog-generation", "7");
             }
+
 
             return response;
         }
@@ -243,7 +251,8 @@ public sealed class ProviderCloudSstRangePinningTests
 
         public override ValueTask<int> ReadAsync(
             Memory<byte> buffer,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             var count = Math.Min(buffer.Length, length - BytesRead);

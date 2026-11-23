@@ -12,10 +12,12 @@ static class CheckpointCampaignReadback
         root = Path.GetFullPath(root);
         var errors = ImmutableArray.CreateBuilder<string>();
         CheckpointEvidence.Campaign? campaign = null;
+
         try
         {
             campaign = await CheckpointEvidence.ReadAsync<CheckpointEvidence.Campaign>(Path.Combine(root, "campaign.json")).ConfigureAwait(false);
             VerifyProvenance(root, campaign.Provenance);
+
             if (campaign.Captured.Select(static item => item.Key).Distinct(StringComparer.Ordinal).Count() != campaign.Captured.Length ||
                 campaign.Captured.Any(item => !CheckpointCells.Attempts.Any(selection => selection.Key == item.Key)))
             {
@@ -26,23 +28,30 @@ static class CheckpointCampaignReadback
         {
             errors.Add($"Campaign provenance is absent/invalid: {exception.Message}");
         }
+
         var rows = ImmutableArray.CreateBuilder<CheckpointEvidence.AttemptVerdict>(9);
+
         foreach (var selection in CheckpointCells.Attempts)
         {
             var matching = campaign?.Captured.Where(item => item.Key == selection.Key).ToArray() ?? [];
+
             if (matching.Length != 1)
             {
                 rows.Add(new CheckpointEvidence.AttemptVerdict(selection.Key, false, null,
                     ["A preregistered attempt is absent or ambiguous."], null, null));
                 continue;
             }
+
             var captured = matching[0];
             var reasons = ImmutableArray.CreateBuilder<string>();
             CheckpointGate.Verdict? gate = null;
+
             if (!captured.NativeOutcome.Success)
             {
                 reasons.Add($"Actual child process failed: exit={captured.NativeOutcome.ExitCode}, killed={captured.NativeOutcome.Killed}, reason={captured.NativeOutcome.TerminationReason}, start={captured.NativeOutcome.StartError}.");
             }
+
+
             try
             {
                 CheckpointArchive.Verify(root, captured);
@@ -59,10 +68,12 @@ static class CheckpointCampaignReadback
             {
                 reasons.Add($"Attempt evidence is incomplete/invalid: {exception.Message}");
             }
+
             var valid = reasons.Count == 0;
             rows.Add(new CheckpointEvidence.AttemptVerdict(selection.Key, valid, valid ? gate!.Miss : null,
                 reasons.ToImmutable(), captured.NativeOutcome, gate));
         }
+
         var attempts = rows.MoveToImmutable();
         var complete = errors.Count == 0 && attempts.All(static row => row.Valid);
         var permitted = complete && CheckpointCells.Workloads.Any(cell =>
@@ -70,8 +81,12 @@ static class CheckpointCampaignReadback
         return new CheckpointEvidence.Readback(complete, permitted, attempts, errors.ToImmutable());
     }
 
-    internal static CheckpointGate.Verdict QualifyAttempt(CheckpointEvidence.Attempt attempt,
-        CheckpointCells.Selection selection, string campaignId, CheckpointEvidence.ProcessOutcome native)
+    internal static CheckpointGate.Verdict QualifyAttempt(
+        CheckpointEvidence.Attempt attempt,
+        CheckpointCells.Selection selection,
+        string campaignId,
+        CheckpointEvidence.ProcessOutcome native
+    )
     {
         Require(attempt.SchemaVersion == "pants-checkpoint-attempt.v1" && attempt.CampaignId == campaignId && attempt.Selection == selection && attempt.Selector == selection.Cell.Workload &&
                 native.Selector == selection.Cell.Workload && native.ProcessId > 0 && native.ProcessId == attempt.ProcessId,
@@ -151,6 +166,7 @@ static class CheckpointCampaignReadback
             "Actual archived-source restore/build/identity process did not succeed.");
         _ = VerifyRuntimeFiles(root, provenance);
         Require(provenance.BuildFiles.Length == 3, "Actual engine/benchmark loaded identity is incomplete.");
+
         foreach (var file in provenance.BuildFiles)
         {
             Require(file.Configuration == "Release" && !file.OptimizerDisabled &&
@@ -170,21 +186,27 @@ static class CheckpointCampaignReadback
             Path.GetRelativePath(runtimeRoot, path).Replace(Path.DirectorySeparatorChar, '/')).ToHashSet(StringComparer.Ordinal);
         Require(files.Count == provenance.RuntimeFilesSha256.Count && files.Count > 0 &&
                 files.All(provenance.RuntimeFilesSha256.ContainsKey), "Fresh build runtime/dependency file set differs.");
+
         foreach (var file in provenance.RuntimeFilesSha256)
         {
             Require(CheckpointProvenance.HashFile(CheckpointArchive.Resolve(runtimeRoot, file.Key)) == file.Value,
                 "Fresh build runtime/dependency bytes differ.");
         }
+
+
         foreach (var file in provenance.BuildFiles)
         {
             Require(provenance.RuntimeFilesSha256.TryGetValue(file.Name, out var hash) && hash == file.Sha256,
                 "Fresh loaded engine identity differs from its compiled runtime output.");
         }
+
         return executable;
     }
 
-    public static bool MatchesLoadedBuild(CheckpointEvidence.Provenance provenance,
-        ImmutableArray<CheckpointEvidence.BuildFile> observed) =>
+    public static bool MatchesLoadedBuild(
+        CheckpointEvidence.Provenance provenance,
+        ImmutableArray<CheckpointEvidence.BuildFile> observed
+    ) =>
         Equal(observed.OrderBy(static file => file.Name, StringComparer.Ordinal).ToArray(),
             provenance.BuildFiles.OrderBy(static file => file.Name, StringComparer.Ordinal).ToArray());
 

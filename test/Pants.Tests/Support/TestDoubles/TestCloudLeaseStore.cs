@@ -38,12 +38,14 @@ sealed class TestCloudLeaseStore : ICloudLeaseStore
     {
         cancellationToken.ThrowIfCancellationRequested();
         Interlocked.Increment(ref _readCount);
+
         if (IndeterminateRead)
         {
             AfterIndeterminateRead?.Invoke(Interlocked.Increment(ref _indeterminateReadCount));
             throw new PantsLeaseIndeterminateException(
                 "The conditional lease read outcome is unknown.");
         }
+
 
         var snapshot = Lease is null
             ? null
@@ -58,15 +60,18 @@ sealed class TestCloudLeaseStore : ICloudLeaseStore
 
     public async ValueTask<bool> TryCreateAsync(
         CloudLeaseRecord lease,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var beforeCreate = BeforeNextCreateAsync;
         BeforeNextCreateAsync = null;
+
         if (beforeCreate is not null)
         {
             await beforeCreate(cancellationToken).ConfigureAwait(false);
         }
+
 
         if (Lease is not null)
         {
@@ -81,16 +86,19 @@ sealed class TestCloudLeaseStore : ICloudLeaseStore
     public async ValueTask<bool> TryReplaceAsync(
         string expectedVersion,
         CloudLeaseRecord lease,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         ReplaceAttempts++;
         var beforeReplace = BeforeNextReplaceAsync;
         BeforeNextReplaceAsync = null;
+
         if (beforeReplace is not null)
         {
             await beforeReplace(cancellationToken).ConfigureAwait(false);
         }
+
 
         if (!StringComparer.Ordinal.Equals(
                 expectedVersion,
@@ -103,6 +111,7 @@ sealed class TestCloudLeaseStore : ICloudLeaseStore
         IndeterminateReplace = false;
         var replacementException = NextReplaceException;
         NextReplaceException = null;
+
         if ((!indeterminate && replacementException is null) ||
             ApplyIndeterminateReplace ||
             ApplyReplaceBeforeException)
@@ -111,13 +120,16 @@ sealed class TestCloudLeaseStore : ICloudLeaseStore
             _version++;
         }
 
+
         var afterReplace = AfterNextReplace;
         AfterNextReplace = null;
         afterReplace?.Invoke();
+
         if (replacementException is not null)
         {
             throw replacementException;
         }
+
 
         if (indeterminate)
         {

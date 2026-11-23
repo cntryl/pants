@@ -86,7 +86,8 @@ public sealed class PantsCloudWalSequenceRecoveryTests
     static async ValueTask CommitAsync(
         IPantsDatabase database,
         string key,
-        string value)
+        string value
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -98,7 +99,8 @@ public sealed class PantsCloudWalSequenceRecoveryTests
     static async ValueTask AssertValueAsync(
         IPantsDatabase database,
         string key,
-        string expected)
+        string expected
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -111,7 +113,8 @@ public sealed class PantsCloudWalSequenceRecoveryTests
     static ValueTask<IPantsDatabase> OpenProviderAsync(
         string cachePath,
         PantsCloudStorageLocation location,
-        RuntimeDependencies dependencies) =>
+        RuntimeDependencies dependencies
+    ) =>
         PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(cachePath, location)
                 .WithBackgroundCompaction(false),
@@ -153,6 +156,7 @@ public sealed class PantsCloudWalSequenceRecoveryTests
     {
         var nextSegmentId = catalog.GetProperty("next_segment_id").GetUInt64();
         Assert.True(nextSegmentId >= 3);
+
         foreach (var segment in catalog.GetProperty("segments").EnumerateArray())
         {
             Assert.True(segment.GetProperty("facts").GetProperty("link").GetProperty("id").GetUInt64() < nextSegmentId);

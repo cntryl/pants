@@ -15,7 +15,11 @@ public sealed class PantsWriteBackpressureSupplementTests
     [InlineData(4, 3, true, true)]
     [InlineData(1, 0, false, false)]
     public async Task ShouldUseMidgesIntegerQueueThresholdOnlyWhenSoftControlsAreEnabled(
-        int capacity, int queued, bool enabled, bool slowed)
+        int capacity,
+        int queued,
+        bool enabled,
+        bool slowed
+    )
     {
         using var directory = new TemporaryDirectory();
         var clock = new ManualSchedulingTimeProvider();
@@ -35,17 +39,20 @@ public sealed class PantsWriteBackpressureSupplementTests
             await probe.Entered.WaitAsync(TestTimeouts.Expected);
             var lookups = Enumerable.Range(0, queued).Select(_ => database.ColumnFamilies.GetAsync("default").AsTask()).ToArray();
             var commit = transaction.CommitAsync(PantsWriteOptions.Sync).AsTask();
+
             try
             {
                 await TestWait.UntilAsync(() => probe.Submissions != 0 || clock.HasTimerDueIn(TimeSpan.FromMilliseconds(1)),
                     "the caller reaches submission or its queue slowdown");
                 Assert.Equal(slowed, clock.HasTimerDueIn(TimeSpan.FromMilliseconds(1)));
                 Assert.Equal(slowed ? 0 : 1, probe.Submissions);
+
                 if (slowed)
                 {
                     clock.Advance(TimeSpan.FromMilliseconds(20));
                     await TestWait.UntilAsync(() => probe.Submissions == 1, "the one delayed submission is registered");
                 }
+
                 Assert.False(commit.IsCompleted);
             }
             finally
@@ -53,6 +60,7 @@ public sealed class PantsWriteBackpressureSupplementTests
                 probe.Release();
                 clock.Advance(TimeSpan.FromMilliseconds(20));
             }
+
             await barrier.WaitAsync(TestTimeouts.Expected);
             await Task.WhenAll(lookups).WaitAsync(TestTimeouts.Expected);
             await commit.WaitAsync(TestTimeouts.Expected);
@@ -87,23 +95,28 @@ public sealed class PantsWriteBackpressureSupplementTests
             var submittedBefore = submissions.HitCount;
             await using var transaction = await database.Transactions.BeginAsync(database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
+
             for (var index = 0; index < 6; index++) { transaction.Put(TestBytes.FromString($"spill-{index}"), expected); }
+
             Assert.NotEmpty(Directory.EnumerateFiles(Path.Combine(directory.Path, "txn"), "*.run"));
             using var cancellation = new CancellationTokenSource();
             var commit = transaction.CommitAsync(PantsWriteOptions.Sync, cancellation.Token).AsTask();
             Assert.True(clock.HasTimerDueIn(TimeSpan.FromMilliseconds(1)));
             Assert.Equal(submittedBefore, submissions.HitCount);
             clock.Advance(TimeSpan.FromMilliseconds(canceled ? 5 : 20));
+
             if (canceled)
             {
                 cancellation.Cancel();
                 await Assert.ThrowsAnyAsync<OperationCanceledException>(() => commit.WaitAsync(TestTimeouts.Expected));
             }
             else { await commit.WaitAsync(TestTimeouts.Expected); }
+
             var after = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(before.WriteSlowdownCount + 1, after.WriteSlowdownCount);
             Assert.Equal(submittedBefore + (canceled ? 0 : 1), submissions.HitCount);
             Assert.False(Directory.Exists(Path.Combine(directory.Path, "txn")));
+
             if (canceled)
             {
                 Assert.Equal(before.CurrentSequence, after.CurrentSequence);
@@ -112,6 +125,7 @@ public sealed class PantsWriteBackpressureSupplementTests
             }
         }
         await using var reopened = await PantsDatabase.OpenAsync(options);
+
         for (var index = 0; index < 6; index++)
         {
             await AssertValueAsync(reopened, reopened.ColumnFamilies.DefaultFamily, $"spill-{index}", canceled ? null : expected);
@@ -133,18 +147,21 @@ public sealed class PantsWriteBackpressureSupplementTests
             await WriteAsync(database, database.ColumnFamilies.DefaultFamily, "seed", "value"u8.ToArray());
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             var transactions = new List<IPantsTransaction>();
+
             for (var index = 0; index < 4; index++)
             {
                 var transaction = await database.Transactions.BeginAsync(database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadWrite);
                 transaction.Put(TestBytes.FromString($"coalesced-{index}"), "value"u8.ToArray());
                 transactions.Add(transaction);
             }
+
             var submittedBefore = probe.Submissions;
             var before = await database.Diagnostics.GetRuntimeMetricsAsync();
             probe.Arm();
             var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
             await probe.Entered.WaitAsync(TestTimeouts.Expected);
             var commits = transactions.Select(transaction => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask()).ToArray();
+
             try
             {
                 Assert.Equal(submittedBefore, probe.Submissions);
@@ -153,6 +170,7 @@ public sealed class PantsWriteBackpressureSupplementTests
                 await TestWait.UntilAsync(() => probe.Submissions == submittedBefore + 4, "all four delayed callers queue their mutations");
             }
             finally { probe.Release(); }
+
             _ = await barrier.WaitAsync(TestTimeouts.Expected);
             await Task.WhenAll(commits).WaitAsync(TestTimeouts.Expected);
             var after = await database.Diagnostics.GetRuntimeMetricsAsync();
@@ -160,9 +178,11 @@ public sealed class PantsWriteBackpressureSupplementTests
             Assert.Equal(before.WalAppendCount + 1, after.WalAppendCount);
             Assert.Equal(TimeSpan.FromMilliseconds(80).Ticks * 100,
                 after.WriteSlowdownNanosecondsTotal - before.WriteSlowdownNanosecondsTotal);
+
             foreach (var transaction in transactions) { await transaction.DisposeAsync(); }
         }
         await using var reopened = await PantsDatabase.OpenAsync(options);
+
         for (var index = 0; index < 4; index++)
         {
             await AssertValueAsync(reopened, reopened.ColumnFamilies.DefaultFamily, $"coalesced-{index}", "value"u8.ToArray());
@@ -185,11 +205,13 @@ public sealed class PantsWriteBackpressureSupplementTests
                          new RuntimeDependencies(probe, runtimeTimeProvider: clock)))
         {
             var debtor = await database.ColumnFamilies.CreateAsync("debtor");
+
             for (var index = 0; index < 4; index++)
             {
                 await WriteAsync(database, debtor, $"seed-{index}", "value"u8.ToArray(), true);
                 await database.Maintenance.FlushAsync(debtor);
             }
+
             await using var retained = await database.Transactions.BeginAsync(debtor, PantsTransactionMode.ReadOnly);
             await using var contender = await database.Transactions.BeginAsync(database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadWrite);
             contender.Put("after-drop"u8.ToArray(), "value"u8.ToArray());
@@ -200,17 +222,21 @@ public sealed class PantsWriteBackpressureSupplementTests
             probe.Arm();
             var drop = database.ColumnFamilies.DropAsync(debtor).AsTask();
             Task? commit = null;
+
             try
             {
                 await probe.Entered.WaitAsync(TestTimeouts.Expected);
                 Assert.False(drop.IsCompleted);
                 Assert.Equal("value"u8.ToArray(), (await retained.GetAsync("seed-0"u8.ToArray()))?.ToArray());
+
                 if (inspectReadAdmission)
                 {
                     IPantsTransaction? unexpected = null;
                     var error = await Record.ExceptionAsync(async () => unexpected = await database.Transactions.BeginAsync(debtor,
                         PantsTransactionMode.ReadOnly));
+
                     if (unexpected is not null) { await unexpected.DisposeAsync(); }
+
                     Assert.IsType<PantsInvalidArgumentException>(error);
                 }
                 else
@@ -227,7 +253,10 @@ public sealed class PantsWriteBackpressureSupplementTests
                 clock.Advance(TimeSpan.FromMilliseconds(20));
                 await drop.WaitAsync(TestTimeouts.Expected);
             }
+
+
             if (commit is not null) { await commit.WaitAsync(TestTimeouts.Expected); }
+
             Assert.True(await waiter.WaitAsync(TestTimeouts.Expected));
             Assert.Null(await database.ColumnFamilies.GetAsync("debtor"));
             Assert.Equal("value"u8.ToArray(), (await retained.GetAsync("seed-0"u8.ToArray()))?.ToArray());
@@ -262,6 +291,7 @@ public sealed class PantsWriteBackpressureSupplementTests
         public void Hit(Failpoint failpoint)
         {
             if (failpoint == Failpoint.BeforeCommitSubmission) { Interlocked.Increment(ref _submissions); }
+
             _hold.Hit(failpoint);
         }
     }

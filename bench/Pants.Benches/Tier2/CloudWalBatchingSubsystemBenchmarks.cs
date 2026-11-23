@@ -32,6 +32,7 @@ public class CloudWalBatchingSubsystemBenchmarks : IAsyncDisposable
     public void Cleanup()
     {
         _persistence.DisposeAsync().AsTask().GetAwaiter().GetResult();
+
         if (Directory.Exists(_path))
         {
             Directory.Delete(_path, true);

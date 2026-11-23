@@ -62,6 +62,7 @@ public sealed class PantsRecoveryRemoteWorkTests
         {
             entered.TrySetResult();
             await release.Task;
+
             if (outcome == "error")
             {
                 throw new IOException("The held range failed.");
@@ -76,6 +77,7 @@ public sealed class PantsRecoveryRemoteWorkTests
             DiskFormat.ReadExactly(stream, bytes);
             return bytes;
         });
+
         try
         {
             await entered.Task.WaitAsync(TestTimeouts.Expected);
@@ -85,6 +87,7 @@ public sealed class PantsRecoveryRemoteWorkTests
         {
             release.TrySetResult();
         }
+
 
         if (outcome == "success")
         {
@@ -138,11 +141,13 @@ public sealed class PantsRecoveryRemoteWorkTests
             minimumWriterEpoch: 7, remoteWalSegments: [remote],
             remoteWalHead: sealedSegment.Facts.Link, remoteSequenceFloor: 1, recoveryWork: sink));
         long credited;
+
         try
         {
             await entered.Task.WaitAsync(TestTimeouts.Expected);
             credited = tracker.CompletedEvents;
             Assert.DoesNotContain(produced, static work => work.Stage == "remote_read");
+
             if (changePhase)
             {
                 tracker.AdvancePhase();
@@ -151,12 +156,14 @@ public sealed class PantsRecoveryRemoteWorkTests
             {
                 scope.Dispose();
             }
+
             time.Advance(TimeSpan.FromSeconds(5));
         }
         finally
         {
             release.TrySetResult();
         }
+
 
         using (var store = await recovery.WaitAsync(TestTimeouts.Expected))
         {

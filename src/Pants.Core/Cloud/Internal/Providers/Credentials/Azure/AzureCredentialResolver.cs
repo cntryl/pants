@@ -6,7 +6,8 @@ static class AzureCredentialResolver
         PantsAzureBlobProvider configuration,
         HttpClient httpClient,
         TimeSpan timeout,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider
+    )
     {
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(timeProvider);
@@ -43,13 +44,15 @@ static class AzureCredentialResolver
 
     static AzureCredentialResolution FromConnectionString(
         PantsAzureBlobProvider configuration,
-        string value)
+        string value
+    )
     {
         var parsed = AzureConnectionString.Parse(value);
         var account = parsed.Account ?? configuration.Account;
         var endpoint = configuration.Endpoint ??
                        parsed.CreateAccountEndpoint() ??
                        ResolveEndpoint(account, null);
+
         if (parsed.AccountKey is { } key)
         {
             return Static(
@@ -57,6 +60,7 @@ static class AzureCredentialResolver
                 endpoint,
                 AzureResolvedCredential.SharedKey(RequireSecret(key)));
         }
+
 
         if (parsed.SasToken is { } sas)
         {
@@ -81,14 +85,17 @@ static class AzureCredentialResolver
         PantsAzureBlobProvider configuration,
         HttpClient httpClient,
         TimeSpan timeout,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider
+    )
     {
         var connection = Environment.GetEnvironmentVariable(
             "AZURE_STORAGE_CONNECTION_STRING");
+
         if (!string.IsNullOrWhiteSpace(connection))
         {
             return FromConnectionString(configuration, connection);
         }
+
 
         var account = string.IsNullOrWhiteSpace(configuration.Account)
             ? Environment.GetEnvironmentVariable("AZURE_STORAGE_ACCOUNT")
@@ -96,6 +103,7 @@ static class AzureCredentialResolver
         account = RequireAccount(account);
         var endpoint = ResolveEndpoint(account, configuration.Endpoint);
         var key = Environment.GetEnvironmentVariable("AZURE_STORAGE_KEY");
+
         if (!string.IsNullOrWhiteSpace(key))
         {
             return Static(
@@ -104,11 +112,14 @@ static class AzureCredentialResolver
                 AzureResolvedCredential.SharedKey(key));
         }
 
+
         var sas = Environment.GetEnvironmentVariable("AZURE_STORAGE_SAS_TOKEN");
+
         if (!string.IsNullOrWhiteSpace(sas))
         {
             return Static(account, endpoint, AzureResolvedCredential.Sas(sas));
         }
+
 
         return new AzureCredentialResolution(
             account,
@@ -125,7 +136,8 @@ static class AzureCredentialResolver
         PantsAzureBlobProvider configuration,
         HttpClient httpClient,
         TimeSpan timeout,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider
+    )
     {
         var account = RequireAccount(configuration.Account);
         var endpoint = ValidateIdentityEndpoint(
@@ -144,7 +156,8 @@ static class AzureCredentialResolver
     static AzureCredentialResolution Static(
         string account,
         Uri endpoint,
-        AzureResolvedCredential credential) => new(account, endpoint, credential);
+        AzureResolvedCredential credential
+    ) => new(account, endpoint, credential);
 
     static Uri ResolveEndpoint(string? account, Uri? endpoint) => endpoint ?? new Uri(
         $"https://{RequireAccount(account)}.blob.core.windows.net",

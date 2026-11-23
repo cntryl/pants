@@ -42,18 +42,22 @@ sealed class RecoveryWorkSink : IDisposable
             }
 
             var stage = new KeyValuePair<string, object?>("pants.recovery.stage", work.Stage);
+
             if (work.Bytes > 0)
             {
                 PantsDiagnostics.RecoveryCompletedBytes.Add(work.Bytes, stage);
             }
+
             if (work.Frames > 0)
             {
                 PantsDiagnostics.RecoveryCompletedFrames.Add(work.Frames, stage);
             }
+
             if (work.Operations > 0)
             {
                 PantsDiagnostics.RecoveryCompletedOperations.Add(work.Operations, stage);
             }
+
 
             _completed?.Invoke(work);
         }

@@ -9,14 +9,16 @@ static class CloudHttpResponseReader
     public static ValueTask<HttpResponseMessage> SendAsync(
         HttpClient client,
         HttpRequestMessage request,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         SendAsync(client, request, null, cancellationToken, cancellationToken);
 
     public static ValueTask<HttpResponseMessage> SendAsync(
         HttpClient client,
         HttpRequestMessage request,
         ulong? expectedRangeObjectLength,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         SendAsync(client, request, expectedRangeObjectLength, cancellationToken, cancellationToken);
 
     public static async ValueTask<HttpResponseMessage> SendAsync(
@@ -24,9 +26,11 @@ static class CloudHttpResponseReader
         HttpRequestMessage request,
         ulong? expectedRangeObjectLength,
         CancellationToken cancellationToken,
-        CancellationToken callerCancellationToken)
+        CancellationToken callerCancellationToken
+    )
     {
         using var attempt = new CloudHttpAttemptObservation(request);
+
         try
         {
             if (request.Method != HttpMethod.Get)
@@ -49,6 +53,7 @@ static class CloudHttpResponseReader
                 mutationResponse.Content = new CloudHttpAttemptResponseContent(
                     mutationResponse.Content,
                     attempt.RecordResponseBodyBytes);
+
                 try
                 {
                     await mutationResponse.Content.LoadIntoBufferAsync(
@@ -70,12 +75,14 @@ static class CloudHttpResponseReader
                     cancellationToken)
                 .ConfigureAwait(false);
             attempt.RecordStatus((int)response.StatusCode);
+
             if (attempt.IsEnabled)
             {
                 response.Content = new CloudHttpAttemptResponseContent(
                     response.Content,
                     attempt.RecordResponseBodyBytes);
             }
+
 
             try
             {
@@ -105,14 +112,17 @@ static class CloudHttpResponseReader
                 var declaredLength = response.IsSuccessStatusCode ? ReadDeclaredLength(response) : null;
                 await response.Content.LoadIntoBufferAsync(client.MaxResponseContentBufferSize, cancellationToken)
                     .ConfigureAwait(false);
+
                 if (declaredLength is { } expected)
                 {
                     var buffered = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+
                     if ((ulong)buffered.Length != expected)
                     {
                         throw InvalidLength();
                     }
                 }
+
 
                 return response;
             }
@@ -139,9 +149,11 @@ static class CloudHttpResponseReader
         RangeHeaderValue requested,
         long maximumBufferSize,
         ulong? expectedObjectLength,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var range = requested.Ranges.Count == 1 ? requested.Ranges.Single() : null;
+
         if (response.StatusCode != HttpStatusCode.PartialContent ||
             !requested.Unit.Equals("bytes", StringComparison.OrdinalIgnoreCase) ||
             range?.From is not { } start || range.To is not { } end ||
@@ -157,11 +169,14 @@ static class CloudHttpResponseReader
             throw new PantsIOException("Cloud ranged GET did not return the requested Content-Range.");
         }
 
+
         var length = checked(end - start + 1);
+
         if (length > maximumBufferSize || length > int.MaxValue)
         {
             throw new PantsIOException("Cloud ranged GET exceeds the configured response buffer limit.");
         }
+
 
         if (ReadDeclaredLength(response) is { } declared && declared != (ulong)length)
         {
@@ -171,6 +186,7 @@ static class CloudHttpResponseReader
         var original = response.Content;
         var stream = await original.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         var data = new byte[(int)length];
+
         try
         {
             await stream.ReadExactlyAsync(data, cancellationToken).ConfigureAwait(false);
@@ -186,7 +202,9 @@ static class CloudHttpResponseReader
 
         // Confirm EOF without draining or retaining an oversized response. This read remains
         // inside the same operation deadline as the headers and requested bytes.
+
         int trailing;
+
         try
         {
             trailing = await stream.ReadAsync(new byte[1], cancellationToken).ConfigureAwait(false);
@@ -196,16 +214,19 @@ static class CloudHttpResponseReader
             throw new CloudBodyReadException("Cloud ranged GET body was reset.", exception);
         }
 
+
         if (trailing != 0)
         {
             throw InvalidLength();
         }
 
         var buffered = new ByteArrayContent(data);
+
         foreach (var header in original.Headers.NonValidated)
         {
             buffered.Headers.TryAddWithoutValidation(header.Key, header.Value);
         }
+
 
         response.Content = buffered;
         original.Dispose();
@@ -221,6 +242,7 @@ static class CloudHttpResponseReader
         }
 
         ulong? expected = null;
+
         foreach (var value in values)
         {
             if (!ulong.TryParse(value.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var declaredLength) ||
@@ -231,6 +253,7 @@ static class CloudHttpResponseReader
 
             expected = declaredLength;
         }
+
 
         return expected;
     }

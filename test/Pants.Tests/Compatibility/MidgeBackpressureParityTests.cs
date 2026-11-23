@@ -53,6 +53,7 @@ public sealed class MidgeBackpressureParityTests
             attempts++;
             Assert.True(attempts <= hardCeiling * 8, "L0 recovery must make progress.");
             var key = TestBytes.FromString($"generation-{accepted:00}");
+
             if (await TryCommitBufferedPutAsync(database, family, key))
             {
                 accepted++;
@@ -66,6 +67,7 @@ public sealed class MidgeBackpressureParityTests
                         TimeSpan.FromSeconds(10)),
                     "Critical L0 pressure must clear without manual compaction.");
             }
+
 
             var layout = await database.Diagnostics.GetStorageLayoutAsync();
             var l0Files = layout.Levels
@@ -101,6 +103,7 @@ public sealed class MidgeBackpressureParityTests
         {
             var key = TestBytes.FromString($"key_{totalWrites}");
             var value = new byte[8 * 1024];
+
             if (await TryCommitBufferedPutAsync(database, family, key, value))
             {
                 totalWrites++;
@@ -114,6 +117,7 @@ public sealed class MidgeBackpressureParityTests
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
         while (totalStalls == 0 && (metrics.SstCount == 0 || metrics.WriteStalled))
         {
             Assert.False(
@@ -122,6 +126,7 @@ public sealed class MidgeBackpressureParityTests
             await Task.Delay(10);
             metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         }
+
 
         Assert.True(
             totalStalls > 0 || (metrics.SstCount > 0 && !metrics.WriteStalled),
@@ -142,12 +147,14 @@ public sealed class MidgeBackpressureParityTests
         IPantsDatabase database,
         IPantsColumnFamily family,
         byte[] key,
-        byte[]? value = null)
+        byte[]? value = null
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadWrite);
         transaction.Put(key, value ?? TestBytes.FromString("value"));
+
         try
         {
             await transaction.CommitAsync(PantsWriteOptions.Buffered);

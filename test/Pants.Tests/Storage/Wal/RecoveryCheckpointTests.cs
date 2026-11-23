@@ -39,18 +39,22 @@ public sealed class RecoveryCheckpointTests
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < CommitCount; index++)
         {
             var value = await reader.GetAsync(TestBytes.FromString($"key-{index:D3}"));
             Assert.Equal(ValueBytes, value!.Value.Length);
         }
 
+
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
         var count = 0;
+
         await foreach (var _ in scan)
         {
             count++;
         }
+
 
         Assert.Equal(CommitCount, count);
     }
@@ -129,10 +133,12 @@ public sealed class RecoveryCheckpointTests
 
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
         var count = 0;
+
         await foreach (var _ in scan)
         {
             count++;
         }
+
 
         Assert.Equal(2, count);
     }
@@ -224,6 +230,7 @@ public sealed class RecoveryCheckpointTests
             await CommitAsync(database, transaction => transaction.Put(doomed, new byte[ValueBytes]));
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             await CommitAsync(database, transaction => transaction.Delete(doomed));
+
             for (var index = 0; index < CommitCount; index++)
             {
                 await CommitAsync(
@@ -318,6 +325,7 @@ public sealed class RecoveryCheckpointTests
         {
             WalCodec.EncodeTransactionMarker(WalOperation.TransactionBegin, 9, 1, 1)
         };
+
         for (var index = 0; index < 8; index++)
         {
             var value = new byte[16 * 1024];
@@ -334,6 +342,7 @@ public sealed class RecoveryCheckpointTests
                 9,
                 1));
         }
+
 
         payloads.Add(WalCodec.EncodeTransactionMarker(WalOperation.TransactionCommit, 9, 10, 1));
         WalTestFiles.ReplaceActiveRecords(directory.Path, payloads);
@@ -358,6 +367,7 @@ public sealed class RecoveryCheckpointTests
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 8; index++)
         {
             var value = await reader.GetAsync(TestBytes.FromString($"spooled-{index}"));
@@ -369,11 +379,13 @@ public sealed class RecoveryCheckpointTests
     {
         var records = new List<WalRecord>();
         var ledger = WalLedgerStore.LoadExisting(Path.Combine(root, "wal"));
+
         foreach (var member in ledger.Members)
         {
             var path = Path.Combine(root, "wal", $"{member.Open.Id:00000000000000000000}.wal");
             WalFrameReader.Visit(File.ReadAllBytes(path), (record, _) => records.Add(record));
         }
+
 
         return records.OrderBy(static record => record.Sequence).Select(static record => Convert.ToHexString(WalCodec.EncodeRecord(record))).ToArray();
     }
@@ -390,6 +402,7 @@ public sealed class RecoveryCheckpointTests
     {
         var state = NewState();
         using var store = LocalDiskStore.Open(root, state);
+
         for (var index = 0; index < count; index++)
         {
             _ = store.AppendCommit(

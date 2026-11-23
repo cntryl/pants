@@ -33,6 +33,7 @@ public sealed class PantsCloudMirrorEfficiencyTests
         {
             Assert.NotNull(await disposed.GetAsync("seed"u8.ToArray()));
             await using var scan = await disposed.ScanAsync(new PantsScanQuery());
+
             await foreach (var entry in scan)
             {
                 Assert.Equal("seed"u8.ToArray(), entry.Key.ToArray());
@@ -74,7 +75,8 @@ public sealed class PantsCloudMirrorEfficiencyTests
 
     static async ValueTask<IPantsDatabase> OpenSeededAsync(
         string path,
-        IFailpointHandler failpoints)
+        IFailpointHandler failpoints
+    )
     {
         var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.SimulatedCloud(path, "pants-tests", "mirror-efficiency/")

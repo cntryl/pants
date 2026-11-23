@@ -92,6 +92,7 @@ public sealed class WalSegmentCoverageTests
     static byte[] Frame(IEnumerable<byte[]> records)
     {
         using var stream = new MemoryStream();
+
         foreach (var record in records)
         {
             Cntryl.Pants.Storage.Internal.DiskFormat.WriteUInt32(stream, checked((uint)record.Length));
@@ -100,6 +101,7 @@ public sealed class WalSegmentCoverageTests
                 Cntryl.Pants.Storage.Internal.DiskFormat.Crc32C(record));
             stream.Write(record);
         }
+
 
         return stream.ToArray();
     }

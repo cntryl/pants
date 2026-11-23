@@ -7,7 +7,8 @@ static class CommitValidator
     public static void Validate(
         RuntimeState state,
         CommitPayload payload,
-        IStorageReadStore? diskStore = null) =>
+        IStorageReadStore? diskStore = null
+    ) =>
         ValidateAsync(state, payload, diskStore, null, CancellationToken.None)
             .AsTask().GetAwaiter().GetResult();
 
@@ -16,13 +17,15 @@ static class CommitValidator
         CommitPayload payload,
         IStorageReadStore? diskStore,
         ResourceBudget? scanMemoryBudget,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         foreach (var (identity, assertions) in payload.Asserts)
         {
             ValidateActiveFamily(state, identity);
             var startFamily = payload.StartSnapshot.Families[identity];
             var currentFamily = GetFamily(state, identity);
+
             foreach (var assertion in assertions)
             {
                 var key = assertion.Key;
@@ -33,11 +36,13 @@ static class CommitValidator
                     key,
                     diskStore,
                     cancellationToken).ConfigureAwait(false);
+
                 if (!Matches(assertion.Expected, start, payload.SnapshotTime))
                 {
                     throw PointConflict(
                         "A value assertion did not match the transaction's start snapshot.");
                 }
+
 
                 if ((currentFamily.TryGetValue(key, out var current) &&
                      current.WriteSequence > payload.StartSnapshot.Sequence) ||
@@ -66,6 +71,7 @@ static class CommitValidator
         await payload.Operations.ForEachAsync(async operation =>
         {
             ValidateActiveFamily(state, operation.Family);
+
             if (operation.Kind == CommitOperationKind.Put &&
                 operation.InsertOnly &&
                 await ResolvePriorExistsAsync(
@@ -78,6 +84,7 @@ static class CommitValidator
             {
                 throw PantsException.InvalidArgument("Insert requires an absent key.");
             }
+
 
             if (payload.ConflictPolicy == PantsConflictPolicy.AbortOnWriteConflict)
             {
@@ -98,9 +105,11 @@ static class CommitValidator
         TransactionIntentOperation operation,
         IStorageReadStore? diskStore,
         ResourceBudget? scanMemoryBudget,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var family = GetFamily(state, operation.Family);
+
         switch (operation.Kind)
         {
             case CommitOperationKind.Put:
@@ -182,13 +191,16 @@ static class CommitValidator
         TransactionIntentOperation operation,
         DateTimeOffset now,
         IStorageReadStore? diskStore,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var prior = payload.Operations.LatestBefore(operation.Ordinal, operation.Key);
+
         if (prior is { IsDeleted: true })
         {
             return false;
         }
+
 
         if (prior is { IsDeleted: false })
         {
@@ -210,7 +222,8 @@ static class CommitValidator
         byte[] key,
         DateTimeOffset now,
         IStorageReadStore? diskStore,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (GetFamily(state, family).TryGetValue(key, out var current))
         {
@@ -226,11 +239,13 @@ static class CommitValidator
             .Where(tombstone => IsInRange(key, tombstone.Start, tombstone.EndExclusive))
             .Select(static tombstone => (ulong?)tombstone.WriteSequence)
             .Max();
+
         if (currentRangeSequence is { } rangeSequence &&
             (diskEntry is null || rangeSequence > diskEntry.Sequence))
         {
             return false;
         }
+
 
         return diskEntry is { IsDelete: false } &&
                !UnixTimestamp.IsExpired(diskEntry.Expiration, now);
@@ -247,7 +262,8 @@ static class CommitValidator
         IStorageReadStore? diskStore,
         ColumnFamilyIdentity family,
         byte[] key,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (diskStore is null)
         {
@@ -266,7 +282,8 @@ static class CommitValidator
         IStorageReadStore? diskStore,
         ColumnFamilyIdentity family,
         byte[] key,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (diskStore is null)
         {
@@ -284,7 +301,8 @@ static class CommitValidator
         IStorageReadStore? diskStore,
         IReadOnlyList<FileMeta> visibleFiles,
         byte[] key,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (diskStore is null)
         {
@@ -307,7 +325,8 @@ static class CommitValidator
         IStorageReadStore? diskStore,
         IReadOnlyList<FileMeta> visibleFiles,
         byte[] key,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var entry = await ResolveDiskCellEntryAsync(
             diskStore,
@@ -328,7 +347,8 @@ static class CommitValidator
         ImmutableSortedDictionary<byte[], CellState> startFamily,
         byte[] key,
         IStorageReadStore? diskStore,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (startFamily.TryGetValue(key, out var startCell))
         {
@@ -353,7 +373,8 @@ static class CommitValidator
     static FileMeta[] GetDiskCandidates(
         IStorageReadStore diskStore,
         ColumnFamilyIdentity family,
-        byte[] key) => diskStore.GetVisibleFilesSnapshot()
+        byte[] key
+    ) => diskStore.GetVisibleFilesSnapshot()
         .GetValueOrDefault(family.Id, [])
         .Where(file =>
             diskStore.IsSstAvailable(file) &&
@@ -368,7 +389,8 @@ static class CommitValidator
         byte[] end,
         ulong afterSequence,
         ResourceBudget? scanMemoryBudget,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (diskStore is null)
         {
@@ -389,7 +411,8 @@ static class CommitValidator
 
     static void ValidateActiveFamily(
         RuntimeState state,
-        ColumnFamilyIdentity identity)
+        ColumnFamilyIdentity identity
+    )
     {
         if (!state.ActiveFamilyVersions.TryGetValue(identity.Name, out var generation) ||
             generation != identity.Generation ||
@@ -403,7 +426,8 @@ static class CommitValidator
 
     static ImmutableSortedDictionary<byte[], CellState> GetFamily(
         RuntimeState state,
-        ColumnFamilyIdentity identity) =>
+        ColumnFamilyIdentity identity
+    ) =>
         state.FamilyData.TryGetValue(identity, out var family)
             ? family
             : throw PantsException.Create(
@@ -413,7 +437,8 @@ static class CommitValidator
     static bool Matches(
         TransactionReadValue expected,
         CellState? actual,
-        DateTimeOffset now)
+        DateTimeOffset now
+    )
     {
         if (expected.Missing)
         {
@@ -433,7 +458,8 @@ static class CommitValidator
         byte[] leftStart,
         byte[] leftEnd,
         byte[] rightStart,
-        byte[] rightEnd) =>
+        byte[] rightEnd
+    ) =>
         ByteArrayComparer.Instance.Compare(leftStart, rightEnd) < 0 &&
         ByteArrayComparer.Instance.Compare(rightStart, leftEnd) < 0;
 

@@ -43,6 +43,7 @@ public sealed class PantsRetainedWalTombstoneRecoveryTests
             var layout = await database.Diagnostics.GetStorageLayoutAsync();
             var files = layout.Levels.SelectMany(static level => level.Files).ToArray();
             Assert.NotEmpty(files);
+
             foreach (var file in files)
             {
                 var bytes = await File.ReadAllBytesAsync(Path.Combine(directory.Path, "sst", file.Name));

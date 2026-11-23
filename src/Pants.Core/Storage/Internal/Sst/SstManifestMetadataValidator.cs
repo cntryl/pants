@@ -5,7 +5,8 @@ static class SstManifestMetadataValidator
     public static void ValidateMetadata(
         SstMetadata metadata,
         FileMeta file,
-        string storageKind)
+        string storageKind
+    )
     {
         if (!file.HasTrustedKeyBounds())
         {
@@ -19,7 +20,8 @@ static class SstManifestMetadataValidator
     public static void Validate(
         SstContents contents,
         FileMeta file,
-        string storageKind)
+        string storageKind
+    )
     {
         var keys = contents.Entries.Select(static entry => entry.Key)
             .Concat(contents.RangeTombstones.SelectMany(static range =>
@@ -30,11 +32,13 @@ static class SstManifestMetadataValidator
             .Concat(contents.RangeTombstones.Select(static range => range.Sequence))
             .ToArray();
 
+
         if (file.HasTrustedKeyBounds())
         {
             ValidateKey(storageKind, file.Name, "smallest", file.SmallestKey, keys.FirstOrDefault());
             ValidateKey(storageKind, file.Name, "largest", file.LargestKey, keys.LastOrDefault());
         }
+
         ValidateSequence(
             storageKind,
             file.Name,
@@ -57,15 +61,18 @@ static class SstManifestMetadataValidator
         byte[]? actualLargestKey,
         ulong? actualSmallestSequence,
         ulong? actualLargestSequence,
-        string storageKind)
+        string storageKind
+    )
     {
         ValidateKey(storageKind, file.Name, "metadata smallest", metadataSmallestKey, actualSmallestKey);
         ValidateKey(storageKind, file.Name, "metadata largest", metadataLargestKey, actualLargestKey);
+
         if (file.HasTrustedKeyBounds())
         {
             ValidateKey(storageKind, file.Name, "smallest", file.SmallestKey, actualSmallestKey);
             ValidateKey(storageKind, file.Name, "largest", file.LargestKey, actualLargestKey);
         }
+
 
         ValidateSequence(
             storageKind,
@@ -86,7 +93,8 @@ static class SstManifestMetadataValidator
         string fileName,
         string boundary,
         byte[]? expected,
-        byte[]? actual)
+        byte[]? actual
+    )
     {
         if (expected is null ? actual is not null : actual is null || !actual.AsSpan().SequenceEqual(expected))
         {
@@ -100,7 +108,8 @@ static class SstManifestMetadataValidator
         string fileName,
         string boundary,
         ulong? expected,
-        ulong? actual)
+        ulong? actual
+    )
     {
         if (expected.HasValue && actual != expected)
         {

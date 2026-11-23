@@ -50,6 +50,7 @@ public sealed class RecoveredFlushAdmissionTests
                     {
                         var reservation = await cache.ReserveFlushAsync(
                             store, generation.FlushOutputBoundBytes, CancellationToken.None);
+
                         try
                         {
                             store.RetainFrozenFlushHeadroom(generation, reservation);
@@ -66,10 +67,12 @@ public sealed class RecoveredFlushAdmissionTests
                 (generation, result, failure) =>
                 {
                     generation.PublicationPlan ??= result?.PublicationPlan;
+
                     if (failure is null)
                     {
                         retained.Remove(generation);
                     }
+
 
                     generation.CompleteAttempt(failure);
                     return ValueTask.FromResult(false);
@@ -93,6 +96,7 @@ public sealed class RecoveredFlushAdmissionTests
             Assert.Empty(Directory.EnumerateFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
 
             pressure.Dispose();
+
             if (publicationFailure == 1)
             {
                 failpoints.Arm(Failpoint.BeforeFlushPublication);
@@ -138,6 +142,7 @@ public sealed class RecoveredFlushAdmissionTests
                 await pipeline.ScheduleNextAsync(retained, true);
                 Assert.Null(await flush.AttemptTask.WaitAsync(TestTimeouts.Expected));
             }
+
 
             Assert.Empty(retained);
             Assert.Equal(publicationFailure + 2, flush.Attempts);

@@ -26,27 +26,33 @@ sealed record MidgeBenchmarkPin(
         ValidateHexDigest(sourceSha, 40, "source_sha");
         ValidateHexDigest(cargoLockSha256, 64, "cargo_lock_sha256");
         ValidateHexDigest(scenarioInventorySha256, 64, "scenario_inventory_sha256");
+
         if (scenarioInventoryFile.Contains('/') || scenarioInventoryFile.Contains('\\') ||
             !Path.GetFileName(scenarioInventoryFile).Equals(scenarioInventoryFile, StringComparison.Ordinal))
         {
             throw new InvalidDataException("The Midge scenario inventory must be a file beside the pin.");
         }
 
+
         var pinDirectory = Path.GetDirectoryName(Path.GetFullPath(path))!;
         var inventoryBytes = File.ReadAllBytes(Path.Combine(pinDirectory, scenarioInventoryFile));
         var actualInventorySha256 = Hash(inventoryBytes);
+
         if (!actualInventorySha256.Equals(scenarioInventorySha256, StringComparison.Ordinal))
         {
             throw new InvalidDataException(
                 $"Midge scenario inventory SHA '{actualInventorySha256}' does not match the configured pin.");
         }
 
+
         var scenarioIds = Encoding.UTF8.GetString(inventoryBytes)
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
         if (scenarioIds.Length == 0 || scenarioIds.Distinct(StringComparer.Ordinal).Count() != scenarioIds.Length)
         {
             throw new InvalidDataException("The configured Midge scenario inventory is empty or contains duplicates.");
         }
+
 
         return new MidgeBenchmarkPin(
             release,

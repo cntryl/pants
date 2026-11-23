@@ -28,10 +28,12 @@ public sealed class PantsWalSalvageRestartTests
         var walPath = WalTestFiles.ActivePath(directory.Path);
         var walBytes = await File.ReadAllBytesAsync(walPath);
         var corruptOffset = WalSegmentCodec.HeaderSize;
+
         for (var index = 0; index < 2; index++)
         {
             corruptOffset += sizeof(uint) * 2 + checked((int)BitConverter.ToUInt32(walBytes, corruptOffset));
         }
+
 
         walBytes[corruptOffset + sizeof(uint)] ^= 0xff;
         await File.WriteAllBytesAsync(walPath, walBytes);
@@ -95,7 +97,8 @@ public sealed class PantsWalSalvageRestartTests
     static ValueTask<IPantsDatabase> OpenAsync(
         string path,
         PantsRecoveryPolicy recoveryPolicy,
-        IFailpointHandler? failpoints = null) =>
+        IFailpointHandler? failpoints = null
+    ) =>
         PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(path)
                 .WithBackgroundCompaction(false)

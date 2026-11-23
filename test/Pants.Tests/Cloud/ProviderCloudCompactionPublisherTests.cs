@@ -183,6 +183,7 @@ public sealed class ProviderCloudCompactionPublisherTests
             SstPublicationAdmission.WithinCompactionRound(new ResourceBudget(1024 * 1024)));
 
         var publication = publisher.PublishAsync([], CancellationToken.None).AsTask();
+
         try
         {
             await getStarted.Task.WaitAsync(TestTimeouts.Expected);
@@ -197,6 +198,7 @@ public sealed class ProviderCloudCompactionPublisherTests
         {
             releaseGet.TrySetResult();
         }
+
 
         await Assert.ThrowsAsync<PantsFencedException>(() => publication);
 

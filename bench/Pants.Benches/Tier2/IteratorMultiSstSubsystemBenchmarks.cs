@@ -15,10 +15,12 @@ public class IteratorMultiSstSubsystemBenchmarks : Tier2Benchmark
     public int MergeEightDisjointRuns()
     {
         var count = 0;
+
         foreach (var _ in _runs.SelectMany(run => run).OrderBy(entry => entry.Key, ByteArrayComparer.Instance))
         {
             count++;
         }
+
 
         return count;
     }
@@ -26,12 +28,14 @@ public class IteratorMultiSstSubsystemBenchmarks : Tier2Benchmark
     static SortedDictionary<byte[], CellState> CreateRun(int run)
     {
         var entries = new SortedDictionary<byte[], CellState>(ByteArrayComparer.Instance);
+
         for (var index = 0; index < KeysPerRun; index++)
         {
             entries.Add(
                 Tier2Data.Key(run * KeysPerRun + index),
                 new CellState(Tier2Data.Value(64), (ulong)index, null));
         }
+
 
         return entries;
     }

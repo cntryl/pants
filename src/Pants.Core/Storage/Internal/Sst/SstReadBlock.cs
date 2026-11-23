@@ -19,7 +19,12 @@ sealed class SstReadBlock(byte[] content, IDisposable? reservation) : IDisposabl
     }
 
     public static async ValueTask<SstReadBlock> ReadAsync(
-        IAsyncSstSource source, long length, SstBlockHandle handle, ResourceBudget? budget, CancellationToken cancellationToken)
+        IAsyncSstSource source,
+        long length,
+        SstBlockHandle handle,
+        ResourceBudget? budget,
+        CancellationToken cancellationToken
+    )
     {
         ValidateHandle(length, handle);
         using var encodedClaim = budget?.Reserve(checked((long)handle.Size));
@@ -35,12 +40,16 @@ sealed class SstReadBlock(byte[] content, IDisposable? reservation) : IDisposabl
             return new SstReadBlock(
                 SstCodec.ReadBlock(encoded, new SstBlockHandle(0, checked((ulong)encoded.Length))), null);
         }
+
+
         if (BinaryPrimitives.ReadUInt32LittleEndian(encoded) != encoded.Length - 4)
         {
             throw new PantsCorruptionException("SST block length does not match its handle.");
         }
+
         var decodedSize = SstBlockCodec.GetDecodedSize(encoded.AsSpan(4));
         var decodedClaim = budget?.Reserve(decodedSize);
+
         try
         {
             return new SstReadBlock(

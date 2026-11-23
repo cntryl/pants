@@ -79,11 +79,13 @@ public sealed class MidgeSyncedCrashControlParityTests
 
     static async Task AssertRecoveredStateAsync(
         IPantsDatabase database,
-        Dictionary<string, string?> expected)
+        Dictionary<string, string?> expected
+    )
     {
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         foreach (var key in Keys)
         {
             var value = await reader.GetAsync(TestBytes.FromString(key));
@@ -92,12 +94,15 @@ public sealed class MidgeSyncedCrashControlParityTests
                 value is { } bytes ? TestBytes.ToText(bytes) : null);
         }
 
+
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
         var scanned = new List<(string Key, string Value)>();
+
         await foreach (var entry in scan)
         {
             scanned.Add((TestBytes.ToText(entry.Key), TestBytes.ToText(entry.Value)));
         }
+
 
         var expectedRows = expected
             .Where(static pair => pair.Value is not null)
@@ -131,6 +136,7 @@ public sealed class MidgeSyncedCrashControlParityTests
     static void CopyCrashImage(string source, string destination)
     {
         Directory.CreateDirectory(destination);
+
         foreach (var sourceDirectory in Directory.EnumerateDirectories(
                      source,
                      "*",
@@ -141,16 +147,19 @@ public sealed class MidgeSyncedCrashControlParityTests
                 Path.GetRelativePath(source, sourceDirectory)));
         }
 
+
         foreach (var sourceFile in Directory.EnumerateFiles(
                      source,
                      "*",
                      SearchOption.AllDirectories))
         {
             var relativePath = Path.GetRelativePath(source, sourceFile);
+
             if (relativePath is "LOCK" or ".midge_leader.lock")
             {
                 continue;
             }
+
 
             var destinationFile = Path.Combine(destination, relativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(destinationFile)!);

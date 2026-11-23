@@ -12,7 +12,8 @@ sealed class SimulatedCloudSstSourceFactory : IAsyncSstSourceFactory
 
     public ValueTask<IAsyncSstSource?> OpenAsync(
         FileMeta file,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         ValidateName(file.Name);

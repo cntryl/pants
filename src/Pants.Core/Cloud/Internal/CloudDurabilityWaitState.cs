@@ -17,7 +17,8 @@ sealed class CloudDurabilityWaitState(
         TimeSpan confirmationBudget,
         Func<ulong> frontier,
         Action ensureAuthority,
-        Func<ulong, OperationDeadline, CancellationToken, ValueTask> request)
+        Func<ulong, OperationDeadline, CancellationToken, ValueTask> request
+    )
         : this(timeProvider, confirmationBudget, frontier, ensureAuthority,
             async (sequence, deadline, admitted, cancellationToken) =>
             {
@@ -55,6 +56,7 @@ sealed class CloudDurabilityWaitState(
                 {
                     continue;
                 }
+
                 if (failure is not null)
                 {
                     CompleteUnderGate(observer, FailureOutcome(observer, failure));
@@ -75,7 +77,9 @@ sealed class CloudDurabilityWaitState(
             {
                 return;
             }
+
             _terminalFailure = new PantsBusyException("The runtime is shutting down.");
+
             foreach (var observer in _observers.ToArray())
             {
                 CompleteUnderGate(observer, new Completion(CompletionKind.Failure, _terminalFailure));
@@ -86,10 +90,12 @@ sealed class CloudDurabilityWaitState(
     public async ValueTask<bool> WaitAsync(ulong sequence, TimeSpan timeout, CancellationToken caller)
     {
         caller.ThrowIfCancellationRequested();
+
         if (timeout < TimeSpan.Zero)
         {
             throw PantsException.InvalidArgument("A cloud durability wait must not have a negative timeout.");
         }
+
         var budget = timeout < confirmationBudget ? timeout : confirmationBudget;
         var deadline = OperationDeadline.FromBudget(budget, timeProvider);
         var observer = new Observer(sequence, caller);
@@ -104,6 +110,7 @@ sealed class CloudDurabilityWaitState(
                 _observers.Add(observer);
             }
         }
+
         try
         {
             using var callerRegistration = caller.Register(() =>
@@ -116,14 +123,17 @@ sealed class CloudDurabilityWaitState(
             using var deadlineRegistration = deadlineCancellation?.Token.Register(() =>
                 Complete(observer, new Completion(CompletionKind.NotCovered))) ?? default;
             CheckAuthority(observer);
+
             if (!observer.Completion.Task.IsCompleted)
             {
                 Confirm(observer, frontier());
             }
+
             if (deadline.IsExpired)
             {
                 Complete(observer, new Completion(CompletionKind.NotCovered));
             }
+
             if (observer.Completion.Task.IsCompleted)
             {
                 return ReadCompletion(await observer.Completion.Task.ConfigureAwait(false));
@@ -131,12 +141,15 @@ sealed class CloudDurabilityWaitState(
 
             // Cancellation and expiry abandon only this route. Their original token and
             // deadline also bound submission, without canceling accepted physical work.
+
             using var submissionCancellation = CancellationTokenSource.CreateLinkedTokenSource(
                 caller, deadlineCancellation?.Token ?? CancellationToken.None);
+
             if (!observer.Completion.Task.IsCompleted)
             {
                 _ = RunRequestAsync(observer, deadline, submissionCancellation.Token);
             }
+
             while (!observer.Completion.Task.IsCompleted)
             {
                 try
@@ -183,12 +196,14 @@ sealed class CloudDurabilityWaitState(
             Complete(observer, FailureOutcome(observer, failure));
             return;
         }
+
         lock (_gate)
         {
             if (!_observers.Contains(observer) || observer.Admitted)
             {
                 return;
             }
+
             observer.Admitted = true;
         }
         Confirm(observer, frontier());
@@ -200,6 +215,7 @@ sealed class CloudDurabilityWaitState(
         {
             return;
         }
+
         try
         {
             ensureAuthority();
@@ -251,10 +267,12 @@ sealed class CloudDurabilityWaitState(
     static bool HandleFailure(Exception failure)
     {
         var mapped = RuntimeExceptionMapper.ToPublicException(failure);
+
         if (mapped is PantsException { Severity: PantsErrorSeverity.Transient or PantsErrorSeverity.Backpressure })
         {
             return false;
         }
+
         System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(mapped).Throw();
         return false;
     }

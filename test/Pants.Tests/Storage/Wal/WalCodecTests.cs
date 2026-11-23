@@ -169,7 +169,8 @@ public sealed class WalCodecTests
         byte[] key,
         byte[] value,
         byte compressionAlgorithm,
-        bool includeValue = true)
+        bool includeValue = true
+    )
     {
         using var payload = new MemoryStream();
         payload.Write("MW"u8);
@@ -178,10 +179,12 @@ public sealed class WalCodecTests
         WriteTlvUInt32(payload, 2, 1);
         WriteTlvUInt64(payload, 3, 5);
         WriteTlv(payload, 4, key);
+
         if (includeValue)
         {
             WriteTlv(payload, 5, value);
         }
+
         WriteTlv(payload, 9, [compressionAlgorithm]);
         return payload.ToArray();
     }
@@ -212,18 +215,22 @@ public sealed class WalCodecTests
     static bool HasTopLevelTlvTag(ReadOnlySpan<byte> payload, byte tag)
     {
         var cursor = 3;
+
         while (cursor < payload.Length)
         {
             var currentTag = payload[cursor++];
             var length = (int)BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(cursor, 4));
             cursor += 4;
+
             if (currentTag == tag)
             {
                 return true;
             }
 
+
             cursor += length;
         }
+
 
         return false;
     }

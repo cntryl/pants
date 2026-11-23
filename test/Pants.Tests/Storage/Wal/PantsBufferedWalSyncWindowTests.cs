@@ -70,6 +70,7 @@ public sealed class PantsBufferedWalSyncWindowTests
     static async Task WaitForNewSyncAsync(IPantsDatabase database, ulong before)
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         while ((await database.Diagnostics.GetRuntimeMetricsAsync()).WalLastSyncedSequence <= before)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);

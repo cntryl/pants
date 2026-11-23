@@ -14,10 +14,12 @@ public sealed class PantsLeveledCompactionTests
             PantsOpenOptions.Local(directory.Path)
                 .WithPerformanceGoal(PantsPerformanceGoal.Latency)
                 .WithBackgroundCompaction(true));
+
         for (var index = 0; index < 3; index++)
         {
             await PutAndFlushAsync(database, index);
         }
+
 
         var layout = await database.Diagnostics.GetStorageLayoutAsync();
         var level = Assert.Single(layout.Levels);
@@ -36,10 +38,12 @@ public sealed class PantsLeveledCompactionTests
             PantsOpenOptions.Local(directory.Path)
                 .WithBackgroundCompaction(false)
                 .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 3, BackgroundEnabled: false)));
+
         for (var index = 0; index < 8; index++)
         {
             await PutAndFlushAsync(database, index);
         }
+
 
         await database.Maintenance.CompactAllAsync();
 
@@ -82,6 +86,7 @@ public sealed class PantsLeveledCompactionTests
         await PutAndFlushAsync(database, 1);
 
         var activeCompaction = database.Maintenance.CompactAllAsync().AsTask();
+
         try
         {
             await failpoint.WaitUntilBlockedAsync(TestTimeouts.Expected);
@@ -96,6 +101,7 @@ public sealed class PantsLeveledCompactionTests
         {
             failpoint.Release();
         }
+
 
         var layout = await database.Diagnostics.GetStorageLayoutAsync();
         Assert.DoesNotContain(layout.Levels, static level => level.Level == 0);
@@ -135,10 +141,12 @@ public sealed class PantsLeveledCompactionTests
             PantsOpenOptions.Local(directory.Path)
                 .WithBackgroundCompaction(true)
                 .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: true)));
+
         for (var index = 0; index < 5; index++)
         {
             await PutAndFlushAsync(database, index);
         }
+
 
         var compaction = database.Maintenance.CompactAllAsync().AsTask();
         await PutAndFlushAsync(database, 5);
@@ -157,10 +165,12 @@ public sealed class PantsLeveledCompactionTests
             PantsOpenOptions.Local(directory.Path)
                 .WithBackgroundCompaction(false)
                 .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 3, BackgroundEnabled: false)));
+
         for (var index = 0; index < 3; index++)
         {
             await PutAndFlushAsync(database, index);
         }
+
 
         Assert.Equal(3, Assert.Single((await database.Diagnostics.GetStorageLayoutAsync()).Levels).FileCount);
 
@@ -226,12 +236,14 @@ public sealed class PantsLeveledCompactionTests
                 await using var transaction = await database.Transactions.BeginAsync(
                     database.ColumnFamilies.DefaultFamily,
                     PantsTransactionMode.ReadWrite);
+
                 for (var index = 0; index < 5; index++)
                 {
                     transaction.Put(
                         TestBytes.FromString($"key-{batch}-{index}"),
                         TestBytes.FromString(new string('v', 40)));
                 }
+
 
                 await transaction.CommitAsync(PantsWriteOptions.Buffered);
                 await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
@@ -251,10 +263,12 @@ public sealed class PantsLeveledCompactionTests
             PantsTransactionMode.ReadOnly);
         var entries = new List<PantsEntry>();
         await using var scan = await read.ScanAsync(new PantsScanQuery());
+
         await foreach (var entry in scan)
         {
             entries.Add(entry);
         }
+
 
         Assert.Equal(10, entries.Count);
     }
@@ -304,11 +318,13 @@ public sealed class PantsLeveledCompactionTests
         await using var read = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 8; index++)
         {
             var value = await read.GetAsync(TestBytes.FromString($"key-{index}"));
             Assert.Equal(index is >= 2 and < 5, value is null);
         }
+
 
         Assert.NotNull(await read.GetAsync("key-9"u8.ToArray()));
     }

@@ -13,6 +13,7 @@ sealed class CloudMemtableSegmentTracker
     public void Reinitialize(IEnumerable<ColumnFamilyIdentity> nonemptyFamilies, ulong currentSegmentId)
     {
         _startedInSegment.Clear();
+
         foreach (var family in nonemptyFamilies)
         {
             _startedInSegment[family] = currentSegmentId;

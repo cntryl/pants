@@ -59,6 +59,7 @@ public sealed class PantsL0AdmissionTests
             MemtableWritePressure.MaximumImmutableMemtablesPerColumnFamily + 1;
 
         var maximumL0 = 0;
+
         for (var attempt = 0; attempt < ceiling * 2; attempt++)
         {
             Assert.True(
@@ -70,6 +71,7 @@ public sealed class PantsL0AdmissionTests
             await database.Maintenance.FlushAsync(family);
             maximumL0 = Math.Max(maximumL0, await CountL0FilesAsync(database));
         }
+
 
         Assert.True(maximumL0 <= ceiling, $"Published L0 reached {maximumL0}; ceiling is {ceiling}.");
         await CommitAsync(database, family, "after");
@@ -87,20 +89,24 @@ public sealed class PantsL0AdmissionTests
                          CreateOptions(directory.Path, L0FileCountTrigger * 100)))
         {
             var family = database.ColumnFamilies.DefaultFamily;
+
             for (var attempt = 0; attempt < ceiling + 2; attempt++)
             {
                 await CommitAsync(database, family, $"key-{attempt}");
                 await database.Maintenance.FlushAsync(family);
             }
 
+
             Assert.True(await CountL0FilesAsync(database) >= ceiling);
         }
 
         var reopenOptions = CreateOptions(directory.Path);
+
         if (timedOpen)
         {
             reopenOptions = reopenOptions.WithOpenTimeout(TestTimeouts.Expected);
         }
+
 
         await using var reopened = await PantsDatabase.OpenAsync(reopenOptions);
         Assert.True(
@@ -114,7 +120,8 @@ public sealed class PantsL0AdmissionTests
     static PantsOpenOptions CreateOptions(
         string path,
         int l0FileCountTrigger = L0FileCountTrigger,
-        long l1TargetSizeBytes = 40L * 1024 * 1024) =>
+        long l1TargetSizeBytes = 40L * 1024 * 1024
+    ) =>
         PantsOpenOptions.Local(path)
             .WithBackgroundCompaction(false)
             .WithCompaction(new PantsCompactionConfiguration(

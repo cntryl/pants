@@ -9,16 +9,20 @@ public sealed class PantsHotSstTrackingTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
+
         for (var index = 0; index < 10; index++)
         {
             await PutAsync(database, $"batch1_key{index:000}", "value1");
         }
 
+
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+
         for (var index = 0; index < 10; index++)
         {
             await PutAsync(database, $"batch2_key{index:000}", "value2");
         }
+
 
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
@@ -35,6 +39,7 @@ public sealed class PantsHotSstTrackingTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
+
         for (var batch = 0; batch < 3; batch++)
         {
             for (var index = 0; index < 5; index++)
@@ -45,6 +50,7 @@ public sealed class PantsHotSstTrackingTests
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
+
         Assert.Equal("value_batch2", await ReadAsync(database, "key000"));
         Assert.Equal("value_batch2", await ReadAsync(database, "key004"));
     }
@@ -54,6 +60,7 @@ public sealed class PantsHotSstTrackingTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
+
         foreach (var (prefix, value) in new[]
                  {
                      ("a", "value_a"),
@@ -69,6 +76,7 @@ public sealed class PantsHotSstTrackingTests
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
+
         Assert.Equal("value_b", await ReadAsync(database, "b005"));
         Assert.Equal("value_a", await ReadAsync(database, "a005"));
         Assert.Equal("value_c", await ReadAsync(database, "c005"));
@@ -79,10 +87,12 @@ public sealed class PantsHotSstTrackingTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
+
         for (var index = 0; index < 20; index++)
         {
             await PutAsync(database, $"key{index:000}", "test_value");
         }
+
 
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 

@@ -45,13 +45,16 @@ sealed class PointReadObservation(bool captureTraces)
         PantsSstReadTier tier,
         bool readerCacheHit,
         bool blockCacheHit,
-        bool candidateBlockContainsKey)
+        bool candidateBlockContainsKey
+    )
     {
         _sstsTouched++;
+
         if (file.Level == 0)
         {
             _l0SstsTouched++;
         }
+
 
         if (readerCacheHit)
         {
@@ -71,6 +74,7 @@ sealed class PointReadObservation(bool captureTraces)
             ? PantsBloomFilterOutcome.Rejected
             : PantsBloomFilterOutcome.NotChecked;
         var dataBlocksRead = 0;
+
         if (decision.BlocksRead != 0)
         {
             if (blockCacheHit)
@@ -97,6 +101,7 @@ sealed class PointReadObservation(bool captureTraces)
                 bloomOutcome = PantsBloomFilterOutcome.FalsePositive;
             }
         }
+
 
         _traces?.Add(new PantsSstReadTrace(
             file.Name,

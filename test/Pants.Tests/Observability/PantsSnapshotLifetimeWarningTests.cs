@@ -88,6 +88,7 @@ public sealed class PantsSnapshotLifetimeWarningTests
         clock.UtcNow += TimeSpan.FromSeconds(11);
 
         Task? compaction = null;
+
         try
         {
             compaction = database.Maintenance.CompactAllAsync().AsTask();
@@ -102,6 +103,7 @@ public sealed class PantsSnapshotLifetimeWarningTests
         finally
         {
             failpoint.Release();
+
             if (compaction is not null)
             {
                 await compaction.WaitAsync(TestTimeouts.Expected);

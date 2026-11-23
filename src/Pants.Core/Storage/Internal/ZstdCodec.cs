@@ -39,10 +39,12 @@ static class ZstdCodec
         var singleSegment = (descriptor & 0x20) != 0;
         var cursor = 5 + (singleSegment ? 0 : 1) + ((descriptor & 3) switch { 0 => 0, 1 => 1, 2 => 2, _ => 4 });
         var sizeBytes = (descriptor >> 6) switch { 0 => singleSegment ? 1 : 0, 1 => 2, 2 => 4, _ => 8 };
+
         if (sizeBytes == 0)
         {
             return null;
         }
+
 
         if (cursor > frame.Length || sizeBytes > frame.Length - cursor)
         {
@@ -64,21 +66,25 @@ static class ZstdCodec
     public static byte[] Decompress(ReadOnlySpan<byte> frame, int maximumBytes)
     {
         var declared = GetContentSize(frame);
+
         if (declared is > int.MaxValue || declared > (ulong)maximumBytes)
         {
             throw new InvalidDataException("Zstd payload exceeds the decompression limit.");
         }
 
         // Unknown-size frames start small and grow, bounded by the limit.
+
         var buffer = new byte[declared is { } size ? (int)size : Math.Min(maximumBytes, 64 * 1024)];
         var total = 0;
         var consumed = 0;
         using var decoder = new ZstandardDecoder();
+
         while (true)
         {
             var status = decoder.Decompress(frame[consumed..], buffer.AsSpan(total), out var read, out var written);
             consumed += read;
             total += written;
+
             switch (status)
             {
                 case OperationStatus.Done:

@@ -60,12 +60,14 @@ public sealed class PantsBestEffortDurabilityTests
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
+
         for (var index = 0; index < 50_000; index++)
         {
             transaction.Put(
                 TestBytes.FromString($"key-{index:00000000}"),
                 TestBytes.FromString($"value-{index:00000000}"));
         }
+
 
         await transaction.CommitAsync(PantsWriteOptions.BestEffort);
 
@@ -77,15 +79,18 @@ public sealed class PantsBestEffortDurabilityTests
     static async Task CommitAsync(
         IPantsDatabase database,
         PantsWriteOptions writeOptions,
-        params (string Key, string Value)[] entries)
+        params (string Key, string Value)[] entries
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
+
         foreach (var (key, value) in entries)
         {
             transaction.Put(TestBytes.FromString(key), TestBytes.FromString(value));
         }
+
 
         await transaction.CommitAsync(writeOptions);
     }

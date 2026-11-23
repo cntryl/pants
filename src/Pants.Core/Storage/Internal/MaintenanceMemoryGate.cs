@@ -52,7 +52,8 @@ sealed class MaintenanceMemoryGate
     async ValueTask<IDisposable> WaitAsync(
         TaskCompletionSource<IDisposable> waiter,
         LinkedListNode<TaskCompletionSource<IDisposable>> node,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await using var registration = cancellationToken.Register(() =>
         {

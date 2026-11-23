@@ -27,13 +27,15 @@ static class CloudConfigurationValidator
 
     internal static PantsCloudValidationReport Validate(
         PantsCloudStorageLocation location,
-        ImmutableArray<PantsCloudStorageRole> roles) =>
+        ImmutableArray<PantsCloudStorageRole> roles
+    ) =>
         ValidateProviderAndPrefix(location.Provider, location.Prefix, roles);
 
     static PantsCloudValidationReport ValidateProviderAndPrefix(
         IPantsCloudProvider? provider,
         string? prefix,
-        ImmutableArray<PantsCloudStorageRole> roles)
+        ImmutableArray<PantsCloudStorageRole> roles
+    )
     {
         if (provider is null)
         {
@@ -48,6 +50,7 @@ static class CloudConfigurationValidator
         var findings = provider.Validate().Findings
             .Select(finding => finding with { Roles = roles })
             .ToList();
+
         if (prefix is not null &&
             (prefix.StartsWith('/') ||
              prefix.Split('/').Any(static segment => segment is "." or "..")))
@@ -57,6 +60,7 @@ static class CloudConfigurationValidator
                 roles,
                 "Cloud prefix must be relative and must not contain dot segments."));
         }
+
 
         if (findings.Count == 0)
         {
@@ -77,7 +81,8 @@ static class CloudConfigurationValidator
     static PantsCloudValidationFinding Failure(
         PantsCloudProviderId provider,
         ImmutableArray<PantsCloudStorageRole> roles,
-        string message) => new(
+        string message
+    ) => new(
         provider,
         roles,
         PantsCloudValidationMode.Structural,

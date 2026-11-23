@@ -43,6 +43,7 @@ public sealed class PantsStreamingScanHardeningTests
         Assert.Equal(0, PantsOpenOptionsResolver.Resolve(options).ScanMemoryPoolBytes);
 
         await using var database = await PantsDatabase.OpenAsync(options);
+
         for (var index = 0; index < 20; index++)
         {
             await using var writer = await database.Transactions.BeginAsync(
@@ -53,6 +54,7 @@ public sealed class PantsStreamingScanHardeningTests
             await writer.CommitAsync(PantsWriteOptions.Buffered);
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
+
 
         var metricsBeforeScan = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(20, metricsBeforeScan.SstCount);
@@ -106,6 +108,7 @@ public sealed class PantsStreamingScanHardeningTests
         var emitted = 0;
         string? firstKey = null;
         PantsCorruptionException? first = null;
+
         while (first is null)
         {
             try
@@ -123,6 +126,7 @@ public sealed class PantsStreamingScanHardeningTests
                 first = exception;
             }
         }
+
 
         Assert.True(emitted > 0);
         Assert.Equal("key-0000", firstKey);
@@ -221,11 +225,13 @@ public sealed class PantsStreamingScanHardeningTests
 
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         var count = 1;
+
         while (await enumerator.MoveNextAsync())
         {
             count++;
             Assert.NotEqual("key-new", TestBytes.ToText(enumerator.Current.Key));
         }
+
 
         Assert.Equal(128, count);
     }
@@ -237,12 +243,14 @@ public sealed class PantsStreamingScanHardeningTests
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
+
         for (var index = 0; index < 128; index++)
         {
             transaction.Put(
                 TestBytes.FromString($"key-{index:0000}"),
                 new byte[1024]);
         }
+
 
         await transaction.CommitAsync(PantsWriteOptions.Buffered);
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
@@ -252,10 +260,12 @@ public sealed class PantsStreamingScanHardeningTests
     static async Task<IReadOnlyList<PantsEntry>> CollectAsync(IPantsScan scan)
     {
         var entries = new List<PantsEntry>();
+
         await foreach (var entry in scan)
         {
             entries.Add(entry);
         }
+
 
         return entries;
     }
