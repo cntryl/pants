@@ -10,9 +10,9 @@
       },
       "Cntryl.Conventions.CodeFixes": {
         "type": "Direct",
-        "requested": "[1.0.4, )",
-        "resolved": "1.0.4",
-        "contentHash": "33RLGXoKyq5tVGDRXrblgDl35PEFot4NnlvdszoNjjqgl20turDKOO7W1+0WxT3Bht/uEbrArtNDhlfFiO1Tvg=="
+        "requested": "[1.0.5, )",
+        "resolved": "1.0.5",
+        "contentHash": "xzG89HvQdBVnMV80ul2NTih4d3d1tAAPdozg/nycsNSqH+GoBSmqij/AcqFuuDyUDv2cdCNXkil/N9GKDWJaog=="
       },
       "Cntryl.Conventions.Testing.Analyzers": {
         "type": "Direct",
