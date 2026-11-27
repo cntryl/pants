@@ -16,9 +16,9 @@
       },
       "Cntryl.Conventions.Testing.Analyzers": {
         "type": "Direct",
-        "requested": "[1.0.2, )",
-        "resolved": "1.0.2",
-        "contentHash": "ecy/PvdClYWzQkxlxojHwFrPHFzL6VM6hRcDXlYtTRUy65UQDcmjYVRB/sMzBKQ7S9PSvzfSHpe2CNMh+E71ow=="
+        "requested": "[1.0.5, )",
+        "resolved": "1.0.5",
+        "contentHash": "LouTFKnyCo5A6lzkrpVSm/AuatyzaSn7RZ2FwAnmTpS8roxu8WEiHQ//1Ke1edr3uLccod/DO4pobOlqR5rSMQ=="
       },
       "Cntryl.Conventions.Testing.CodeFixes": {
         "type": "Direct",
