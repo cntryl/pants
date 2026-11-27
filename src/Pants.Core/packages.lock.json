@@ -4,9 +4,9 @@
     "net11.0": {
       "Cntryl.Conventions.Analyzers": {
         "type": "Direct",
-        "requested": "[1.0.4, )",
-        "resolved": "1.0.4",
-        "contentHash": "EZfjxye4Nv8NPpqwPQyLuQIobHH/TvGmQkkygmRbNRFF5pmUSdvUxHlXPgFa4xrh/+us//Bv+2We+1+FD4esrQ=="
+        "requested": "[1.0.5, )",
+        "resolved": "1.0.5",
+        "contentHash": "n9rF8PnRWpela1Nbpi8vFp1b2iMNGr2o8vfVXVxIz8sv+EaxkYYHDPCZNyLjrYWvkErts5G4M0JEbQxNuEKBeg=="
       },
       "Cntryl.Conventions.CodeFixes": {
         "type": "Direct",
