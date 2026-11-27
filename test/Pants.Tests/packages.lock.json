@@ -22,9 +22,9 @@
       },
       "Cntryl.Conventions.Testing.CodeFixes": {
         "type": "Direct",
-        "requested": "[1.0.2, )",
-        "resolved": "1.0.2",
-        "contentHash": "P7tA+MZDP/LvbywoI0y4MnNQcLVHjc+wGr5/OJnk9YLYrvrU49L3dsjWwiKa1JabwZ5Lf7lbDymVM4VFY/7bSQ=="
+        "requested": "[1.0.5, )",
+        "resolved": "1.0.5",
+        "contentHash": "YcbX5LQAntaqZzo/ibH5n29xL9cI86sCK67Bc8junJ5WEyFjZmt1KJQ8yxUG8T6JfBiCVUZqDj0QhkWInsUbvg=="
       },
       "Corvus.Text.Json.Validator": {
         "type": "Direct",
