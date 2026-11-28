@@ -2,108 +2,107 @@ name: Publish
 
 on:
   workflow_dispatch:
+    inputs:
+      packages-run-id:
+        description: Successful Packages run containing the validated internal release.
+        required: true
+        type: string
 
 permissions: {}
 
 concurrency:
-  group: pants-github-packages-publish
+  group: nuget-org-publish
   cancel-in-progress: false
 
 jobs:
-  version:
-    uses: ./.github/workflows/version.yml
-    permissions:
-      contents: read
-
   publish:
-    name: Publish NuGet packages
-    needs: version
+    name: Publish to NuGet.org
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
+    environment: nuget.org
     permissions:
-      contents: write
-      packages: write
+      actions: read
+      id-token: write
     env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      PACKAGE_VERSION: ${{ needs.version.outputs.semver }}
-      PACKAGE_SOURCE: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
+      NUGET_SOURCE: https://api.nuget.org/v3/index.json
     defaults:
       run:
         shell: bash
     steps:
-      - name: Require main
+      - name: Verify internal Packages run
+        id: packages
         env:
-          REF: ${{ github.ref }}
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.packages-run-id }}
         run: |
-          if [[ "$REF" != refs/heads/main ]]; then
-            echo "::error title=Invalid release ref::Publish must run from refs/heads/main; got $REF"
-            exit 1
-          fi
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+          attempt="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" | jq -er '
+            select(.path == ".github/workflows/packages.yml" and .head_branch == "main"
+                   and .event == "workflow_dispatch" and .conclusion == "success") | .run_attempt')"
+          echo "artifact=release-packages-$attempt" >> "$GITHUB_OUTPUT"
 
-      - name: Check out repository
-        uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8.0.2
         with:
-          fetch-depth: 0
-          fetch-tags: true
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.packages-run-id }}
+          name: ${{ steps.packages.outputs.artifact }}
+          path: artifacts/packages
 
-      - name: Install .NET 11 SDK
-        uses: actions/setup-dotnet@v6
+      - uses: actions/setup-dotnet@v6
         with:
-          global-json-file: global.json
-          cache: true
-          cache-dependency-path: '**/packages.lock.json'
+          dotnet-version: 11.0.x
 
-      - name: Validate package version
+      - name: Check public dependency availability
         run: |
-          if [[ ! "$PACKAGE_VERSION" =~ ^2\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error title=Invalid package version::Expected 2.x, got $PACKAGE_VERSION"
-            exit 1
-          fi
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from xml.etree import ElementTree as xml
+          from zipfile import ZipFile
 
-      - name: Restore locked dependencies
-        run: dotnet restore Pants.slnx --locked-mode
+          packages = sorted(Path("artifacts/packages").glob("*.nupkg"))
+          if not packages:
+              raise SystemExit("The internal run did not provide NuGet packages.")
 
-      - name: Pack NuGet packages
-        run: >
-          dotnet pack Pants.slnx
-          --configuration Release
-          --no-restore
-          --output artifacts/packages
-          -p:PackageVersion="$PACKAGE_VERSION"
+          probe = Path(os.environ["RUNNER_TEMP"]) / "nuget-probe"
+          probe.mkdir()
+          project = xml.Element("Project", Sdk="Microsoft.NET.Sdk")
+          properties = xml.SubElement(project, "PropertyGroup")
+          xml.SubElement(properties, "TargetFramework").text = "net11.0"
+          references = xml.SubElement(project, "ItemGroup")
+          for package in packages:
+              with ZipFile(package) as archive:
+                  nuspec, = (name for name in archive.namelist() if name.endswith(".nuspec"))
+                  metadata = xml.fromstring(archive.read(nuspec)).find("{*}metadata")
+              xml.SubElement(references, "PackageReference", Include=metadata.findtext("{*}id"),
+                             Version=f"[{metadata.findtext('{*}version')}]")
+          xml.ElementTree(project).write(probe / "Probe.csproj")
+          PY
+          dotnet restore "$RUNNER_TEMP/nuget-probe/Probe.csproj" \
+            --source "$PWD/artifacts/packages" --source "$NUGET_SOURCE" \
+            --packages "$RUNNER_TEMP/nuget-preflight" --no-http-cache
 
-      - name: Verify package set
-        run: |
-          test -f "artifacts/packages/Cntryl.Pants.Abstractions.${PACKAGE_VERSION}.nupkg"
-          test -f "artifacts/packages/Cntryl.Pants.Core.${PACKAGE_VERSION}.nupkg"
-          test -f "artifacts/packages/Cntryl.Pants.DependencyInjection.${PACKAGE_VERSION}.nupkg"
-          test "$(find artifacts/packages -maxdepth 1 -name '*.nupkg' -type f | wc -l)" -eq 3
+      - name: Log in to NuGet.org
+        uses: NuGet/login@v1.2.0
+        id: nuget
+        with:
+          user: ${{ secrets.NUGET_USER }}
 
-      - name: Publish to GitHub Packages
+      - name: Publish validated packages
         env:
-          NUGET_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >
-          dotnet nuget push "artifacts/packages/*.nupkg"
-          --api-key "$NUGET_AUTH_TOKEN"
-          --source "$PACKAGE_SOURCE"
-          --skip-duplicate
-
-      - name: Create tag if missing
-        id: tag
+          NUGET_API_KEY: ${{ steps.nuget.outputs.NUGET_API_KEY }}
         run: |
-          tag="v${PACKAGE_VERSION}"
-          if git show-ref --tags --verify --quiet "refs/tags/$tag"; then
-            tag_commit="$(git rev-list -n 1 "$tag")"
-            if [[ "$tag_commit" != "$GITHUB_SHA" ]]; then
-              echo "::error title=Tag conflict::$tag points to $tag_commit; expected $GITHUB_SHA"
-              exit 1
+          dotnet nuget push "artifacts/packages/*.nupkg" \
+            --source "$NUGET_SOURCE" --api-key "$NUGET_API_KEY" --skip-duplicate
+
+      - name: Verify public package restore
+        run: |
+          for attempt in {1..10}; do
+            if dotnet restore "$RUNNER_TEMP/nuget-probe/Probe.csproj" \
+              --source "$NUGET_SOURCE" --packages "$RUNNER_TEMP/nuget-public" --no-http-cache --force; then
+              exit 0
             fi
-            echo "created=false" >> "$GITHUB_OUTPUT"
-          else
-            git tag "$tag" "$GITHUB_SHA"
-            echo "created=true" >> "$GITHUB_OUTPUT"
-          fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
-      - name: Push tag to origin
-        if: steps.tag.outputs.created == 'true'
-        run: git push origin "refs/tags/${{ steps.tag.outputs.tag }}"
+            sleep 15
+          done
+          exit 1

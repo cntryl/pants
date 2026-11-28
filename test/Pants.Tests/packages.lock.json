@@ -4,27 +4,27 @@
     "net11.0": {
       "Cntryl.Conventions.Analyzers": {
         "type": "Direct",
-        "requested": "[1.0.4, )",
-        "resolved": "1.0.4",
-        "contentHash": "EZfjxye4Nv8NPpqwPQyLuQIobHH/TvGmQkkygmRbNRFF5pmUSdvUxHlXPgFa4xrh/+us//Bv+2We+1+FD4esrQ=="
+        "requested": "[1.0.5, )",
+        "resolved": "1.0.5",
+        "contentHash": "n9rF8PnRWpela1Nbpi8vFp1b2iMNGr2o8vfVXVxIz8sv+EaxkYYHDPCZNyLjrYWvkErts5G4M0JEbQxNuEKBeg=="
       },
       "Cntryl.Conventions.CodeFixes": {
         "type": "Direct",
-        "requested": "[1.0.4, )",
-        "resolved": "1.0.4",
-        "contentHash": "33RLGXoKyq5tVGDRXrblgDl35PEFot4NnlvdszoNjjqgl20turDKOO7W1+0WxT3Bht/uEbrArtNDhlfFiO1Tvg=="
+        "requested": "[1.0.5, )",
+        "resolved": "1.0.5",
+        "contentHash": "xzG89HvQdBVnMV80ul2NTih4d3d1tAAPdozg/nycsNSqH+GoBSmqij/AcqFuuDyUDv2cdCNXkil/N9GKDWJaog=="
       },
       "Cntryl.Conventions.Testing.Analyzers": {
         "type": "Direct",
-        "requested": "[1.0.2, )",
-        "resolved": "1.0.2",
-        "contentHash": "ecy/PvdClYWzQkxlxojHwFrPHFzL6VM6hRcDXlYtTRUy65UQDcmjYVRB/sMzBKQ7S9PSvzfSHpe2CNMh+E71ow=="
+        "requested": "[1.0.5, )",
+        "resolved": "1.0.5",
+        "contentHash": "LouTFKnyCo5A6lzkrpVSm/AuatyzaSn7RZ2FwAnmTpS8roxu8WEiHQ//1Ke1edr3uLccod/DO4pobOlqR5rSMQ=="
       },
       "Cntryl.Conventions.Testing.CodeFixes": {
         "type": "Direct",
-        "requested": "[1.0.2, )",
-        "resolved": "1.0.2",
-        "contentHash": "P7tA+MZDP/LvbywoI0y4MnNQcLVHjc+wGr5/OJnk9YLYrvrU49L3dsjWwiKa1JabwZ5Lf7lbDymVM4VFY/7bSQ=="
+        "requested": "[1.0.5, )",
+        "resolved": "1.0.5",
+        "contentHash": "YcbX5LQAntaqZzo/ibH5n29xL9cI86sCK67Bc8junJ5WEyFjZmt1KJQ8yxUG8T6JfBiCVUZqDj0QhkWInsUbvg=="
       },
       "Corvus.Text.Json.Validator": {
         "type": "Direct",
