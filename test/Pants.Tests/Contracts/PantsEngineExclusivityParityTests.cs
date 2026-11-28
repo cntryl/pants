@@ -59,16 +59,18 @@ public sealed class PantsEngineExclusivityParityTests
     public async Task ShouldFenceWritesAfterLocalLeaseOwnershipIsLost()
     {
         using var directory = new TemporaryDirectory();
-        var leaseLost = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var time = new ManualSchedulingTimeProvider();
+        var leaseLost = false;
         var options = PantsOpenOptions.Local(directory.Path)
-            .WithLeaseLossCallback(() => leaseLost.TrySetResult());
+            .WithLeaseLossCallback(() => leaseLost = true);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new RuntimeDependencies(leaseHeartbeatInterval: TimeSpan.FromSeconds(1)));
+            new RuntimeDependencies(leaseHeartbeatInterval: TimeSpan.FromSeconds(1), runtimeTimeProvider: time));
         await using (var mutationLock = await AcquireLeaseMutationLockAsync(
                          Path.Combine(directory.Path, ".midge_leader.lock")))
         {
-            await leaseLost.Task.WaitAsync(TestTimeouts.Expected);
+            time.Advance(options.Lease.TimeToLive);
+            Assert.True(leaseLost);
         }
 
         Assert.False(database.PersistentStorage!.IsPrimaryLeaseHealthy);
